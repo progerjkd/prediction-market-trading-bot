@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+.envrc
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+data/bot.sqlite
+data/bot.sqlite-journal
+data/bot.sqlite-wal
+data/bot.sqlite-shm
+data/STOP
+data/models/
+*.log
+logs/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Claude
+.claude/local/
+.claude/settings.json
+.claude/settings.local.json
+
+# Local planning/reference artifacts
+How to Build an AI-Powered Prediction Market Trading Bot Using Claude Skills.pdf
+.worktrees/
