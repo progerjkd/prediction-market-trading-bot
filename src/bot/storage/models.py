@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -16,6 +16,11 @@ class FlaggedMarket:
     spread: float
     volume_24h: float
     flagged_at: int = field(default_factory=lambda: int(time.time()))
+    question: str = ""
+    end_date_iso: str | None = None
+    liquidity: float = 0.0
+    edge_proxy: float = 0.0
+    raw_json: str = "{}"
 
 
 @dataclass

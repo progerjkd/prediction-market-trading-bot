@@ -2,7 +2,6 @@
 import math
 
 import pytest
-
 from kelly_size import kelly_fraction, kelly_size
 
 

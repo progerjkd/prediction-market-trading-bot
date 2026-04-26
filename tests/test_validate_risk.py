@@ -4,11 +4,8 @@ Each rule is tested in isolation: only that rule fails; all others pass.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import replace
 from pathlib import Path
-
-import pytest
 
 from validate_risk import RiskCheck, RiskInputs, RiskLimits, validate_risk
 

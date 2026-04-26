@@ -6,7 +6,6 @@ import math
 import pytest
 
 from bot.paper.simulator import (
-    Fill,
     OrderBook,
     OrderBookLevel,
     Side,

@@ -13,12 +13,13 @@ Each stage is a Claude Skill (`.claude/skills/<name>/SKILL.md`). Strategy lives 
 ## Quick start
 
 ```bash
-python -m venv .venv
+uv venv --python /Users/roger/.pyenv/versions/3.12.2/bin/python .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+uv pip install --python .venv/bin/python -e '.[dev]'
 cp .env.example .env  # fill in keys
 pytest                # run unit tests
-python -m bot.daemon --once --paper  # smoke test
+python -m bot.daemon --once --paper --mock-ai --max-markets 1  # local smoke test
+python -m bot.daemon --once --paper --scan-only --max-markets 10  # live-data scan
 python -m bot.daemon                 # always-on paper trading
 ```
 
@@ -40,3 +41,4 @@ Daemon halts new signals within 60s.
 ## Going live
 
 Set `LIVE_TRADING=true` only after ≥50 paper trades show win rate > 60% and Brier < 0.25.
+The v1 code still forces paper mode even if the environment flag is set.

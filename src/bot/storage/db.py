@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS markets_flagged (
     mid_price REAL,
     spread REAL,
     volume_24h REAL,
+    question TEXT,
+    end_date_iso TEXT,
+    liquidity REAL,
+    edge_proxy REAL,
+    raw_json TEXT,
     flagged_at INTEGER NOT NULL,
     PRIMARY KEY (condition_id, flagged_at)
 );
@@ -109,6 +114,14 @@ CREATE TABLE IF NOT EXISTS book_snapshots (
 CREATE INDEX IF NOT EXISTS idx_book_token_time ON book_snapshots(token_id, captured_at DESC);
 """
 
+MARKETS_FLAGGED_EXTRA_COLUMNS = {
+    "question": "TEXT",
+    "end_date_iso": "TEXT",
+    "liquidity": "REAL",
+    "edge_proxy": "REAL",
+    "raw_json": "TEXT",
+}
+
 
 async def open_db(path: Path | str = DEFAULT_DB_PATH) -> aiosqlite.Connection:
     """Open or create the SQLite DB at `path`. Applies schema idempotently."""
@@ -118,9 +131,18 @@ async def open_db(path: Path | str = DEFAULT_DB_PATH) -> aiosqlite.Connection:
     await conn.execute("PRAGMA journal_mode=WAL")
     await conn.execute("PRAGMA foreign_keys=ON")
     await conn.executescript(SCHEMA)
+    await _ensure_markets_flagged_columns(conn)
     await conn.commit()
     return conn
 
 
 def db_path_from_env() -> Path:
     return Path(os.environ.get("BOT_DB_PATH", str(DEFAULT_DB_PATH)))
+
+
+async def _ensure_markets_flagged_columns(conn: aiosqlite.Connection) -> None:
+    cur = await conn.execute("PRAGMA table_info(markets_flagged)")
+    existing = {row[1] for row in await cur.fetchall()}
+    for name, column_type in MARKETS_FLAGGED_EXTRA_COLUMNS.items():
+        if name not in existing:
+            await conn.execute(f"ALTER TABLE markets_flagged ADD COLUMN {name} {column_type}")

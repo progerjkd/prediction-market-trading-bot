@@ -19,7 +19,7 @@ def brier_score(predicted: Sequence[float], actual: Sequence[int]) -> float:
         raise ValueError(f"length mismatch: {len(predicted)} vs {len(actual)}")
     if not predicted:
         return 0.0
-    return sum((p - a) ** 2 for p, a in zip(predicted, actual)) / len(predicted)
+    return sum((p - a) ** 2 for p, a in zip(predicted, actual, strict=True)) / len(predicted)
 
 
 def win_rate(pnls: Sequence[float]) -> float:

@@ -1,8 +1,6 @@
 """Smoke tests for storage layer (in-memory SQLite)."""
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from bot.storage.db import open_db

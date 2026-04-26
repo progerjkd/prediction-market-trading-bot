@@ -73,7 +73,7 @@ class PolymarketClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def __aenter__(self) -> "PolymarketClient":
+    async def __aenter__(self) -> PolymarketClient:
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
@@ -156,7 +156,7 @@ def _parse_clob_token_ids(market: dict[str, Any]) -> tuple[str, str] | None:
         return None
     # Map by outcome label so we know which is YES vs NO.
     if len(outcomes) >= 2:
-        labelled = dict(zip(outcomes, ids))
+        labelled = dict(zip(outcomes, ids, strict=False))
         yes = labelled.get("Yes") or labelled.get("YES") or ids[0]
         no = labelled.get("No") or labelled.get("NO") or ids[1]
     else:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
 
 import aiosqlite
 
@@ -19,9 +18,23 @@ from .models import (
 async def insert_flagged_market(conn: aiosqlite.Connection, m: FlaggedMarket) -> None:
     await conn.execute(
         "INSERT OR REPLACE INTO markets_flagged "
-        "(condition_id, yes_token, no_token, mid_price, spread, volume_24h, flagged_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (m.condition_id, m.yes_token, m.no_token, m.mid_price, m.spread, m.volume_24h, m.flagged_at),
+        "(condition_id, yes_token, no_token, mid_price, spread, volume_24h, question, "
+        " end_date_iso, liquidity, edge_proxy, raw_json, flagged_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            m.condition_id,
+            m.yes_token,
+            m.no_token,
+            m.mid_price,
+            m.spread,
+            m.volume_24h,
+            m.question,
+            m.end_date_iso,
+            m.liquidity,
+            m.edge_proxy,
+            m.raw_json,
+            m.flagged_at,
+        ),
     )
     await conn.commit()
 
@@ -31,7 +44,9 @@ async def latest_flagged_markets(
 ) -> list[FlaggedMarket]:
     cutoff = int(time.time()) - since_seconds_ago
     cur = await conn.execute(
-        "SELECT condition_id, yes_token, no_token, mid_price, spread, volume_24h, flagged_at "
+        "SELECT condition_id, yes_token, no_token, mid_price, spread, volume_24h, flagged_at, "
+        "       COALESCE(question, ''), end_date_iso, COALESCE(liquidity, 0), "
+        "       COALESCE(edge_proxy, 0), COALESCE(raw_json, '{}') "
         "FROM markets_flagged WHERE flagged_at >= ? ORDER BY flagged_at DESC",
         (cutoff,),
     )

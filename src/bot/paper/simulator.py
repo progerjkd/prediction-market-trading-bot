@@ -6,10 +6,10 @@ record a simulated fill (or partial / no-fill) with realistic slippage.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 
-class Side(str, Enum):
+class Side(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
 
@@ -54,12 +54,17 @@ def simulate_fill(
 
     if side == Side.BUY:
         levels = orderbook.asks
-        accept = lambda price: price <= limit_price
         slip_sign = 1
+
+        def accept(price: float) -> bool:
+            return price <= limit_price
+
     else:
         levels = orderbook.bids
-        accept = lambda price: price >= limit_price
         slip_sign = -1
+
+        def accept(price: float) -> bool:
+            return price >= limit_price
 
     remaining = size
     filled = 0.0

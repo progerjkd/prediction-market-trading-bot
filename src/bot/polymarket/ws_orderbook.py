@@ -50,14 +50,18 @@ class OrderBookSubscriber:
             try:
                 await self._connect_and_stream()
                 backoff = 1.0  # reset on clean disconnect
-            except (ConnectionClosed, WebSocketException, OSError, asyncio.TimeoutError) as e:
+            except (TimeoutError, ConnectionClosed, WebSocketException, OSError) as e:
                 log.warning("ws disconnect: %s; reconnecting in %.1fs", e, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self.max_backoff)
 
     async def _connect_and_stream(self) -> None:
         async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
-            sub = {"type": "Market", "assets_ids": self.token_ids}
+            sub = {
+                "type": "market",
+                "assets_ids": self.token_ids,
+                "custom_feature_enabled": True,
+            }
             await ws.send(json.dumps(sub))
             log.info("ws subscribed to %d tokens", len(self.token_ids))
 
