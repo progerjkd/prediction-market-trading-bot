@@ -10,15 +10,17 @@
 - `3c03193` - `feat: resume paper trading MVP pipeline`
 - `f4723a0` - `feat: harden live Polymarket scan path`
 - `da20252` - `feat: XGBoost training pipeline + real inference wired into orchestrator`
+- `58c1e56` - `feat: daemon hardening — graceful shutdown, heartbeat, STOP-file watcher`
+- `5902177` - `feat: compound/postmortem loop — settle expired paper trades automatically`
+- `7d585b4` - `feat: persist no-fill and partial-fill outcomes with intended_size`
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `131 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
-- Full test suite includes a live WebSocket integration test; latest full-suite run and isolated retry
-  both timed out waiting for a live message after 30s.
+- Deterministic tests pass: `162 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -93,7 +95,7 @@ Observed output (2026-04-26):
 - `orchestrator._candidates_from_markets`: logs warning on orderbook fetch failure instead of silent swallow.
 - 14 new tests in `tests/test_polymarket_client.py`.
 
-### Daemon hardening
+### Daemon hardening (58c1e56)
 
 - `daemon.py` long-running mode now has an internal shutdown controller.
 - SIGTERM/SIGINT request graceful shutdown; the daemon finishes any in-flight pass and does not start
@@ -104,13 +106,29 @@ Observed output (2026-04-26):
 - `tests/test_daemon.py` now covers repeated loop passes, halt summaries, STOP-file shutdown,
   signal-triggered shutdown state, heartbeat logging, and once-mode smoke behavior.
 
+### Compound/postmortem loop (5902177)
+
+- `PolymarketClient.get_market_resolution(condition_id)` — queries Gamma `outcomePrices`; returns `MarketResolution(resolved, final_yes_price)`.
+- `fetch_open_trades(conn)` — repo query returning open trades with `end_date_iso` via subquery join on `markets_flagged`.
+- `_settle_expired_trades(conn, client)` in `orchestrator.py` — runs at the top of every `run_once()` pass. For each open trade whose `end_date_iso` is in the past and whose market is resolved, closes the trade with PnL, inserts a `Lesson`, and appends to `failure_log.md`.
+- `append_to_failure_log()` in `pm-compound/scripts/postmortem.py`.
+- `RunSummary.trades_settled` counter.
+- 16 tests in `tests/test_compound.py`.
+
+### Partial-fill persistence (7d585b4)
+
+- No-fill trades (book empty at execution time, after passing scan) persisted as `outcome="no_fill"`, `size=0`, `pnl=0`, immediately closed. Previously silently dropped.
+- `intended_size` field added to `Trade` model and DB (`trades` table). Additive migration via `_ensure_trades_columns()`.
+- All fills (full and partial) now record `intended_size`; unfilled = `intended_size - size`.
+- `RunSummary.no_fill_trades` counter.
+- 15 tests in `tests/test_partial_fill.py`.
+
 ## Next Highest-Value Work
 
-1. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
-2. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
-3. **WebSocket queue runtime integration**: feed live orderbook queue updates into daemon/orchestrator flow instead of only testing the subscriber.
-4. **Retrain automation**: automate weekly model refresh guardrails (fetch → train → deploy only if acceptance criteria pass).
-5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+1. **WebSocket queue runtime integration**: feed live orderbook queue updates into daemon/orchestrator flow instead of only testing the subscriber.
+2. **Retrain automation**: automate weekly model refresh guardrails (fetch → train → deploy only if acceptance criteria pass).
+3. **Metrics + acceptance dashboard**: track win rate, Brier score, drawdown per day so the live-trading gate can be evaluated.
+4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
 
