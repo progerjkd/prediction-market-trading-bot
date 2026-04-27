@@ -93,6 +93,34 @@ async def insert_trade(conn: aiosqlite.Connection, t: Trade) -> int:
     return cur.lastrowid
 
 
+async def open_paper_trades(conn: aiosqlite.Connection) -> list[Trade]:
+    cur = await conn.execute(
+        "SELECT id, prediction_id, condition_id, token_id, side, size, limit_price, "
+        "       fill_price, slippage, is_paper, opened_at, closed_at, pnl, outcome "
+        "FROM trades WHERE closed_at IS NULL AND is_paper = 1 ORDER BY opened_at ASC"
+    )
+    rows = await cur.fetchall()
+    return [
+        Trade(
+            id=row[0],
+            prediction_id=row[1],
+            condition_id=row[2],
+            token_id=row[3],
+            side=row[4],
+            size=row[5],
+            limit_price=row[6],
+            fill_price=row[7],
+            slippage=row[8],
+            is_paper=bool(row[9]),
+            opened_at=row[10],
+            closed_at=row[11],
+            pnl=row[12],
+            outcome=row[13],
+        )
+        for row in rows
+    ]
+
+
 async def insert_paper_execution(conn: aiosqlite.Connection, e: PaperExecution) -> int:
     cur = await conn.execute(
         "INSERT INTO paper_executions "

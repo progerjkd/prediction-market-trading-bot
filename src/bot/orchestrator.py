@@ -5,6 +5,8 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -14,16 +16,26 @@ from bot.claude.client import ClaudeForecastClient
 from bot.config import RuntimeSettings
 from bot.paper.simulator import Fill, OrderBook, OrderBookLevel, Side, simulate_fill
 from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
-from bot.skills import ensure_skill_script_paths
-from bot.storage.models import FlaggedMarket, PaperExecution, Prediction, ResearchBrief, Trade
+from bot.skills import PROJECT_ROOT, ensure_skill_script_paths
+from bot.storage.models import (
+    FlaggedMarket,
+    Lesson,
+    PaperExecution,
+    Prediction,
+    ResearchBrief,
+    Trade,
+)
 from bot.storage.repo import (
+    close_trade,
     daily_api_cost_usd,
     daily_loss_usd,
     insert_flagged_market,
+    insert_lesson,
     insert_paper_execution,
     insert_prediction,
     insert_research_brief,
     insert_trade,
+    open_paper_trades,
     open_positions_count,
     total_open_exposure,
 )
@@ -39,10 +51,12 @@ from filter_markets import (  # noqa: E402
 from filter_markets import days_to_resolution as _market_days_remaining  # noqa: E402
 from infer_xgboost import infer_probability as xgb_infer  # noqa: E402
 from kelly_size import kelly_size  # noqa: E402
+from postmortem import classify_trade  # noqa: E402
 from prompt_guard import build_research_prompt  # noqa: E402
 from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
 
 log = logging.getLogger(__name__)
+FAILURE_LOG_PATH = PROJECT_ROOT / ".claude" / "skills" / "pm-compound" / "references" / "failure_log.md"
 
 
 @dataclass(frozen=True)
@@ -51,6 +65,8 @@ class RunSummary:
     flagged_markets: int = 0
     predictions_written: int = 0
     paper_trades_written: int = 0
+    closed_positions: int = 0
+    lessons_written: int = 0
     skipped_signals: int = 0
     halt_reason: str | None = None
 
@@ -82,6 +98,15 @@ async def run_once(
     )
     forecaster = claude_client or ClaudeForecastClient()
     try:
+        closed_positions, lessons_written = await _compound_closed_positions(conn, client)
+        budget_reason = await _current_halt_reason(conn, settings)
+        if budget_reason:
+            return RunSummary(
+                closed_positions=closed_positions,
+                lessons_written=lessons_written,
+                halt_reason=budget_reason,
+            )
+
         markets = await client.list_markets(limit=max_markets, active_only=True)
         candidates = await _candidates_from_markets(client, markets[:max_markets])
         flagged = filter_tradeable_markets(
@@ -96,7 +121,12 @@ async def run_once(
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
 
         if scan_only:
-            return RunSummary(scanned_markets=len(markets), flagged_markets=len(flagged))
+            return RunSummary(
+                scanned_markets=len(markets),
+                flagged_markets=len(flagged),
+                closed_positions=closed_positions,
+                lessons_written=lessons_written,
+            )
 
         predictions_written = 0
         trades_written = 0
@@ -158,11 +188,138 @@ async def run_once(
             flagged_markets=len(flagged),
             predictions_written=predictions_written,
             paper_trades_written=trades_written,
+            closed_positions=closed_positions,
+            lessons_written=lessons_written,
             skipped_signals=skipped,
         )
     finally:
         if owns_client:
             await client.close()
+
+
+async def _compound_closed_positions(
+    conn: aiosqlite.Connection,
+    client: PolymarketClient | Any,
+    *,
+    failure_log_path: Path | None = None,
+) -> tuple[int, int]:
+    open_trades = await open_paper_trades(conn)
+    if not open_trades:
+        return 0, 0
+
+    markets = await client.list_markets(limit=max(100, len(open_trades)), active_only=False)
+    markets_by_condition = {market.condition_id: market for market in markets}
+    closed_positions = 0
+    lessons_written = 0
+
+    for trade in open_trades:
+        if trade.id is None:
+            continue
+        market = markets_by_condition.get(trade.condition_id)
+        if market is None:
+            continue
+        final_yes_price = _resolved_yes_price(market)
+        if final_yes_price is None:
+            continue
+
+        pnl = _paper_position_pnl(trade, final_yes_price)
+        outcome = "YES" if final_yes_price >= 0.5 else "NO"
+        await close_trade(conn, trade.id, pnl=pnl, outcome=outcome)
+        closed_positions += 1
+
+        if pnl < 0:
+            cause, rule_proposed = classify_trade(pnl, trade.slippage)
+            notes = f"condition_id={trade.condition_id}; outcome={outcome}; pnl={pnl:.2f}"
+            await insert_lesson(
+                conn,
+                Lesson(
+                    trade_id=trade.id,
+                    cause=cause,
+                    rule_proposed=rule_proposed,
+                    notes=notes,
+                ),
+            )
+            _append_failure_log(
+                failure_log_path or FAILURE_LOG_PATH,
+                trade=trade,
+                pnl=pnl,
+                outcome=outcome,
+                cause=cause,
+                rule_proposed=rule_proposed,
+            )
+            lessons_written += 1
+
+    return closed_positions, lessons_written
+
+
+def _resolved_yes_price(market: Market) -> float | None:
+    raw = market.raw
+    outcome_prices = _decode_jsonish(raw.get("outcomePrices"))
+    if isinstance(outcome_prices, list) and outcome_prices:
+        try:
+            return _clamp_probability(float(outcome_prices[0]))
+        except (TypeError, ValueError):
+            pass
+
+    for key in ("final_yes_price", "finalYesPrice", "yesPrice", "resolvedYesPrice"):
+        if raw.get(key) is not None:
+            try:
+                return _clamp_probability(float(raw[key]))
+            except (TypeError, ValueError):
+                pass
+
+    for key in ("resolvedOutcome", "winningOutcome", "winner", "outcome"):
+        outcome = raw.get(key)
+        if isinstance(outcome, str):
+            normalized = outcome.strip().lower()
+            if normalized == "yes":
+                return 1.0
+            if normalized == "no":
+                return 0.0
+
+    return None
+
+
+def _decode_jsonish(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _clamp_probability(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
+def _paper_position_pnl(trade: Trade, final_yes_price: float) -> float:
+    entry_price = trade.fill_price if trade.fill_price is not None else trade.limit_price
+    if trade.side.upper() == "SELL":
+        return (entry_price - final_yes_price) * trade.size
+    return (final_yes_price - entry_price) * trade.size
+
+
+def _append_failure_log(
+    path: Path,
+    *,
+    trade: Trade,
+    pnl: float,
+    outcome: str,
+    cause: str,
+    rule_proposed: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).isoformat()
+    with path.open("a", encoding="utf-8") as f:
+        f.write(
+            f"\n## {timestamp} trade {trade.id}\n"
+            f"- condition_id: {trade.condition_id}\n"
+            f"- outcome: {outcome}\n"
+            f"- pnl: {pnl:.2f}\n"
+            f"- cause: {cause}\n"
+            f"- rule: {rule_proposed}\n"
+        )
 
 
 async def _candidates_from_markets(
