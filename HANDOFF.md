@@ -2,7 +2,7 @@
 
 ## Current Branch
 
-`feature/resume-mvp`
+`feature/partial-fill-persistence`
 
 ## Key Commits
 
@@ -10,13 +10,14 @@
 - `3c03193` - `feat: resume paper trading MVP pipeline`
 - `f4723a0` - `feat: harden live Polymarket scan path`
 - `da20252` - `feat: XGBoost training pipeline + real inference wired into orchestrator`
+- `ff64429` - `fix: correct script paths in retrain cadence docs`
 
 ## Current State
 
-- Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
+- Repository worktree is at `/Users/roger/workspace/pm-bot-partial-fills`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Tests pass: `124 passed`.
+- Tests pass: `130 passed`.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -91,14 +92,22 @@ Observed output (2026-04-26):
 - `orchestrator._candidates_from_markets`: logs warning on orderbook fetch failure instead of silent swallow.
 - 14 new tests in `tests/test_polymarket_client.py`.
 
+### Partial-fill persistence (working tree, 2026-04-26)
+
+- Added `paper_executions` SQLite table for every post-risk paper simulator outcome.
+- Added `PaperExecution` model and `insert_paper_execution()` repository helper.
+- `orchestrator._paper_execute_if_allowed()` now records requested size, filled size, unfilled size, limit price, fill price, slippage, status, and optional linked trade id.
+- Full and partial fills still create `trades` rows for open paper positions.
+- No-fills now persist as `paper_executions.status = "NO_FILL"` with no linked trade, so open-position and exposure calculations remain unchanged.
+- Added storage and orchestrator tests for full-fill, partial-fill, and no-fill persistence.
+
 ## Next Highest-Value Work
 
 1. **Daemon hardening**: heartbeat task, graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher, WebSocket queue integration.
 2. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
-3. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
-4. **WebSocket integration test**: subscribe to 1 known market for 30s, confirm book updates land on asyncio queue.
-5. **Retrain cadence**: document or automate weekly model refresh (fetch → train → deploy).
-6. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+3. **WebSocket runtime wiring**: feed live orderbook updates into the daemon loop instead of using only request/response snapshots.
+4. **Retrain automation**: automate weekly model refresh checks (fetch → train → acceptance gate → deploy).
+5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
 
@@ -165,7 +174,7 @@ If any criterion fails, keep the existing model file in place and investigate da
 ## Commands To Run First
 
 ```bash
-cd /Users/roger/workspace/prediction-market-trading-bot
+cd /Users/roger/workspace/pm-bot-partial-fills
 git status --short --branch
 source .venv/bin/activate
 .venv/bin/pytest
