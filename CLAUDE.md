@@ -72,3 +72,51 @@ Five Claude skills in `.claude/skills/pm-{scan,research,predict,risk,compound}/`
 ### Linting
 
 Ruff families: `E`, `F`, `I`, `B`, `UP`, `SIM`. `E501` (line length) is ignored. Line length target is 100.
+
+## Sprint Teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
+
+Use the ad-hoc sprint team pattern to parallelize independent development tasks.
+
+### When to use
+
+Dispatch multiple agents in parallel when you have 2+ tasks that touch different
+files and can be understood independently. Do not parallelize tasks that share
+`orchestrator.py`, `daemon.py`, `storage/db.py`, or `pyproject.toml`.
+
+### Independence rules
+
+| Independent (safe to parallelize)              | Shared (one agent at a time)    |
+| ---------------------------------------------- | ------------------------------- |
+| `.claude/skills/pm-*/` (each skill dir)        | `src/bot/orchestrator.py`       |
+| Individual `tests/test_*.py` files             | `src/bot/daemon.py`             |
+| `src/bot/polymarket/`                          | `src/bot/storage/db.py`         |
+| `src/bot/claude/`                              | `pyproject.toml`                |
+| `src/bot/paper/`                               |                                 |
+
+### Invocation
+
+```python
+Agent(
+    team_name="pm-sprint",
+    isolation="worktree",   # each agent gets its own git branch
+    name="task-a",
+    prompt="<filled brief from .claude/sprint-brief-template.md>"
+)
+```
+
+Dispatch all independent agents **in the same message** to run in parallel.
+
+### Integration checklist
+
+After all agents report back:
+1. Read each summary — verify stated changes match the ask
+2. Check for file conflicts between worktrees
+3. `.venv/bin/pytest && .venv/bin/ruff check .` across all changes
+4. Merge each worktree branch into the working branch
+
+**Hard rule:** Never merge an agent worktree if its tests fail, even if the summary claims they pass.
+
+### Codex fallback
+
+When Claude rate limits are hit, hand the remaining brief to Codex (web UI or CLI).
+The brief format works verbatim in any AI tool. Apply the result with `git apply`.
