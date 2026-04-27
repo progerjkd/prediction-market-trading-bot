@@ -40,6 +40,7 @@ class RuntimeSettings:
     clob_host: str = "https://clob.polymarket.com"
     gamma_host: str = "https://gamma-api.polymarket.com"
     ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    ws_orderbook_enabled: bool = False
     chain_id: int = 137
     scan_min_volume: float = 200.0
     scan_min_liquidity: float = 50.0
@@ -71,6 +72,7 @@ def load_settings() -> RuntimeSettings:
         clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
         gamma_host=os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com"),
         ws_host=os.environ.get("WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+        ws_orderbook_enabled=_env_bool("WS_ORDERBOOK_ENABLED", False),
         chain_id=_env_int("CHAIN_ID", 137),
         scan_min_volume=_env_float("SCAN_MIN_VOLUME", 200.0),
         scan_min_liquidity=_env_float("SCAN_MIN_LIQUIDITY", 50.0),
