@@ -35,6 +35,8 @@ from filter_markets import (  # noqa: E402
     filter_tradeable_markets,
     to_flagged_market_kwargs,
 )
+from filter_markets import days_to_resolution as _market_days_remaining  # noqa: E402
+from infer_xgboost import infer_probability as xgb_infer  # noqa: E402
 from kelly_size import kelly_size  # noqa: E402
 from prompt_guard import build_research_prompt  # noqa: E402
 from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
@@ -205,7 +207,22 @@ async def _predict(
         claude_probability = forecast.probability
         claude_reason = forecast.reasoning
 
-    xgboost_probability = min(0.95, max(0.05, candidate.mid_price + (0.12 if mock_ai else 0.02)))
+    if mock_ai:
+        xgboost_probability = min(0.95, candidate.mid_price + 0.12)
+        xgb_source = "mock_ai"
+    else:
+        xgboost_probability, xgb_source = xgb_infer(
+            {
+                "current_mid": candidate.mid_price,
+                "spread": candidate.spread,
+                "volume_24h": candidate.volume_24h,
+                "days_to_resolution": _market_days_remaining(candidate.end_date_iso),
+                "narrative_score": 0.0,
+                "momentum_1h": 0.0,
+                "momentum_24h": 0.0,
+            },
+            model_path=settings.xgboost_model_path,
+        )
     decision = make_prediction_decision(
         condition_id=candidate.condition_id,
         token_id=candidate.yes_token,
@@ -217,6 +234,7 @@ async def _predict(
     components = dict(decision.components)
     components["claude_reason"] = claude_reason
     components["research_prompt"] = research_prompt
+    components["xgb_source"] = xgb_source
     return type(decision)(
         condition_id=decision.condition_id,
         token_id=decision.token_id,

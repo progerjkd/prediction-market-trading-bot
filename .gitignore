@@ -64,6 +64,7 @@ data/bot.sqlite-wal
 data/bot.sqlite-shm
 data/STOP
 data/models/
+data/training_data.csv
 *.log
 logs/
 

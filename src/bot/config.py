@@ -46,6 +46,7 @@ class RuntimeSettings:
     scan_max_spread: float = 0.05
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
+    xgboost_model_path: Path = Path("data/models/xgboost.json")
 
     @property
     def live_trading_enabled(self) -> bool:
@@ -76,4 +77,5 @@ def load_settings() -> RuntimeSettings:
         scan_max_spread=_env_float("SCAN_MAX_SPREAD", 0.05),
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
+        xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
     )
