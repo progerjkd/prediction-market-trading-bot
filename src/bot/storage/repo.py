@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, date, datetime
 
 import aiosqlite
+
+from bot.metrics import brier_score, max_drawdown, profit_factor, sharpe_ratio, win_rate
 
 from .models import (
     ApiSpend,
@@ -186,6 +189,88 @@ async def daily_api_cost_usd(conn: aiosqlite.Connection, since_ts: int) -> float
     )
     row = await cur.fetchone()
     return float(row[0]) if row else 0.0
+
+
+async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> None:
+    """Compute and upsert metrics for date_str (ISO format: '2026-04-27') into metrics_daily."""
+    d = date.fromisoformat(date_str)
+    day_start = int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp())
+    day_end = day_start + 86_400
+
+    cur = await conn.execute(
+        """
+        SELECT t.pnl, p.p_model, t.outcome
+        FROM trades t
+        LEFT JOIN predictions p ON t.prediction_id = p.id
+        WHERE t.closed_at >= ? AND t.closed_at < ?
+          AND t.outcome IN ('YES', 'NO')
+          AND t.is_paper = 1
+        """,
+        (day_start, day_end),
+    )
+    rows = await cur.fetchall()
+
+    pnls = [float(r[0]) for r in rows if r[0] is not None]
+    predicted = [float(r[1]) for r in rows if r[1] is not None]
+    actual = [1 if r[2] == "YES" else 0 for r in rows if r[1] is not None]
+
+    n_trades = len(rows)
+    wr = win_rate(pnls)
+    bs = brier_score(predicted, actual)
+    pnl_total = sum(pnls)
+    sr = sharpe_ratio(pnls)
+    equity = []
+    running = 0.0
+    for p in pnls:
+        running += p
+        equity.append(running)
+    dd = max_drawdown(equity)
+    pf = profit_factor(pnls)
+    api_cost = await daily_api_cost_usd(conn, day_start)
+
+    await conn.execute(
+        """
+        INSERT INTO metrics_daily
+            (date, win_rate, sharpe, max_drawdown, profit_factor, brier_score, n_trades, pnl_usd, api_cost_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+            win_rate=excluded.win_rate, sharpe=excluded.sharpe, max_drawdown=excluded.max_drawdown,
+            profit_factor=excluded.profit_factor, brier_score=excluded.brier_score,
+            n_trades=excluded.n_trades, pnl_usd=excluded.pnl_usd, api_cost_usd=excluded.api_cost_usd
+        """,
+        (date_str, wr, sr, dd, pf, bs, n_trades, pnl_total, api_cost),
+    )
+    await conn.commit()
+
+
+async def acceptance_criteria_met(conn: aiosqlite.Connection) -> tuple[bool, str]:
+    """Check if all-time paper trading meets the live-trading gate (50 trades, >60% win, Brier <0.25)."""
+    cur = await conn.execute(
+        """
+        SELECT t.pnl, p.p_model, t.outcome
+        FROM trades t
+        LEFT JOIN predictions p ON t.prediction_id = p.id
+        WHERE t.outcome IN ('YES', 'NO') AND t.is_paper = 1
+        """
+    )
+    rows = await cur.fetchall()
+
+    n = len(rows)
+    if n < 50:
+        return False, f"need 50 settled trades, have {n}"
+
+    pnls = [float(r[0]) for r in rows if r[0] is not None]
+    wr = win_rate(pnls)
+    if wr <= 0.60:
+        return False, f"win rate {wr:.1%} must exceed 60%"
+
+    predicted = [float(r[1]) for r in rows if r[1] is not None]
+    actual = [1 if r[2] == "YES" else 0 for r in rows if r[1] is not None]
+    bs = brier_score(predicted, actual)
+    if bs >= 0.25:
+        return False, f"Brier score {bs:.3f} must be below 0.25"
+
+    return True, ""
 
 
 async def insert_book_snapshot(

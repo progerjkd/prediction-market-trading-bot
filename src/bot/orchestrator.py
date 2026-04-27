@@ -29,6 +29,7 @@ from bot.storage.repo import (
     insert_research_brief,
     insert_trade,
     open_positions_count,
+    persist_daily_metrics,
     total_open_exposure,
 )
 
@@ -156,6 +157,9 @@ async def run_once(
             else:
                 await insert_trade(conn, trade)
                 trades_written += 1
+
+        today = _today_iso()
+        await persist_daily_metrics(conn, today)
 
         return RunSummary(
             scanned_markets=len(markets),
@@ -469,3 +473,8 @@ def _to_paper_orderbook(book: OrderBookSnapshot) -> OrderBook:
 
 def summary_to_json(summary: RunSummary) -> str:
     return json.dumps(summary.__dict__, sort_keys=True)
+
+
+def _today_iso() -> str:
+    from datetime import date
+    return date.today().isoformat()
