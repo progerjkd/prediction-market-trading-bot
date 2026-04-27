@@ -14,16 +14,24 @@ import aiosqlite
 from bot.budgets import BudgetLimits, RuntimeBudgetSnapshot, halt_reason
 from bot.claude.client import ClaudeForecastClient
 from bot.config import RuntimeSettings
-from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
+from bot.paper.simulator import Fill, OrderBook, OrderBookLevel, Side, simulate_fill
 from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
 from bot.skills import PROJECT_ROOT, ensure_skill_script_paths
-from bot.storage.models import FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
+from bot.storage.models import (
+    FlaggedMarket,
+    Lesson,
+    PaperExecution,
+    Prediction,
+    ResearchBrief,
+    Trade,
+)
 from bot.storage.repo import (
     close_trade,
     daily_api_cost_usd,
     daily_loss_usd,
     insert_flagged_market,
     insert_lesson,
+    insert_paper_execution,
     insert_prediction,
     insert_research_brief,
     insert_trade,
@@ -61,6 +69,12 @@ class RunSummary:
     lessons_written: int = 0
     skipped_signals: int = 0
     halt_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PaperExecutionResult:
+    trade: Trade | None
+    execution: PaperExecution
 
 
 async def run_once(
@@ -147,7 +161,7 @@ async def run_once(
                 skipped += 1
                 continue
 
-            trade = await _paper_execute_if_allowed(
+            execution_result = await _paper_execute_if_allowed(
                 conn=conn,
                 client=client,
                 settings=settings,
@@ -156,10 +170,17 @@ async def run_once(
                 p_model=decision.p_model,
                 p_market=decision.p_market,
             )
-            if trade is None:
+            if execution_result is None:
+                skipped += 1
+                continue
+
+            if execution_result.trade is None:
+                await insert_paper_execution(conn, execution_result.execution)
                 skipped += 1
             else:
-                await insert_trade(conn, trade)
+                trade_id = await insert_trade(conn, execution_result.trade)
+                execution_result.execution.trade_id = trade_id
+                await insert_paper_execution(conn, execution_result.execution)
                 trades_written += 1
 
         return RunSummary(
@@ -407,7 +428,7 @@ async def _paper_execute_if_allowed(
     prediction_id: int,
     p_model: float,
     p_market: float,
-) -> Trade | None:
+) -> PaperExecutionResult | None:
     size_usd = _proposed_size_usd(p_model=p_model, p_market=p_market, settings=settings)
     if size_usd <= 0:
         return None
@@ -447,18 +468,35 @@ async def _paper_execute_if_allowed(
     limit_price = min(0.99, max(candidate.mid_price, (book.best_ask or candidate.mid_price)))
     shares = size_usd / limit_price
     fill = simulate_fill(orderbook, side=Side.BUY, size=shares, limit_price=limit_price)
-    if fill.filled_size <= 0:
-        return None
-    return Trade(
+    execution = PaperExecution(
         condition_id=candidate.condition_id,
         token_id=candidate.yes_token,
         side="BUY",
-        size=fill.filled_size,
+        requested_size=shares,
+        filled_size=fill.filled_size,
+        unfilled_size=fill.unfilled_size,
         limit_price=limit_price,
-        fill_price=fill.avg_price,
+        fill_price=fill.avg_price if fill.filled_size > 0 else None,
         slippage=fill.slippage,
+        status=_fill_status(fill),
         is_paper=True,
         prediction_id=prediction_id,
+    )
+    if fill.filled_size <= 0:
+        return PaperExecutionResult(trade=None, execution=execution)
+    return PaperExecutionResult(
+        trade=Trade(
+            condition_id=candidate.condition_id,
+            token_id=candidate.yes_token,
+            side="BUY",
+            size=fill.filled_size,
+            limit_price=limit_price,
+            fill_price=fill.avg_price,
+            slippage=fill.slippage,
+            is_paper=True,
+            prediction_id=prediction_id,
+        ),
+        execution=execution,
     )
 
 
@@ -502,6 +540,14 @@ def _to_paper_orderbook(book: OrderBookSnapshot) -> OrderBook:
         asks=[OrderBookLevel(price=price, size=size) for price, size in book.asks],
         bids=[OrderBookLevel(price=price, size=size) for price, size in book.bids],
     )
+
+
+def _fill_status(fill: Fill) -> str:
+    if fill.filled_size <= 0:
+        return "NO_FILL"
+    if fill.unfilled_size > 0:
+        return "PARTIAL_FILL"
+    return "FULL_FILL"
 
 
 def summary_to_json(summary: RunSummary) -> str:

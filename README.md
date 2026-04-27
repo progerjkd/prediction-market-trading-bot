@@ -1,3 +1,5 @@
+![Polymarket Trading Bot banner](docs/banner.png)
+
 # Polymarket Trading Bot — Claude Skills MVP
 
 AI-powered prediction market trading bot for Polymarket. Five-stage Claude-Skills pipeline orchestrated by an asyncio daemon. **Paper trading only** in v1 — going live is a one-flag flip.
