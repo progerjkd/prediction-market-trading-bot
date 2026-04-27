@@ -9,13 +9,14 @@
 - `de40553` - `chore: baseline project scaffold`
 - `3c03193` - `feat: resume paper trading MVP pipeline`
 - `f4723a0` - `feat: harden live Polymarket scan path`
+- `da20252` - `feat: XGBoost training pipeline + real inference wired into orchestrator`
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Tests pass: `100 passed`.
+- Tests pass: `124 passed`.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -71,6 +72,16 @@ Observed output (2026-04-26):
 - Storage schema was extended for richer flagged-market records.
 - Tests added for config, budget guards, scan filters, research prompt guard, predict ensemble, orchestrator, daemon smoke mode, and Polymarket client (retry + pagination).
 
+### XGBoost training pipeline (da20252)
+
+- `fetch_resolved_markets.py`: pages through Gamma API, reconstructs pre-resolution `current_mid` from `final_yes_price - oneDayPriceChange`. Fetched 9,983 resolved markets.
+- `train_xgboost.py`: `train_from_dataframe()` with XGBClassifier (n_estimators=200, max_depth=4, learning_rate=0.05). Trained model at `data/models/xgboost.json`; 85.7% accuracy on held-out 20%.
+- `infer_xgboost.py`: `infer_probability()` loads model from disk; falls back gracefully (returns `current_mid`, source=`xgboost_model_missing`) when model file absent.
+- `orchestrator.py`: `_predict()` now calls real `xgb_infer()` with actual market features; stores `xgb_source` in prediction components.
+- `config.py`: `xgboost_model_path` setting with `XGBOOST_MODEL_PATH` env override.
+- To retrain: `fetch_resolved_markets.py --output data/training_data.csv` then `train_xgboost.py`.
+- 24 new tests (18 for feature extraction, 6 for training/inference).
+
 ### Scan path hardening (f4723a0)
 
 - `PolymarketClient._get_with_retry`: exponential backoff on TransportError, TimeoutException, 5xx (3 attempts).
@@ -82,11 +93,12 @@ Observed output (2026-04-26):
 
 ## Next Highest-Value Work
 
-1. Add a real paper-mode prediction flow that uses stored research briefs and the XGBoost missing-model fallback consistently (current XGBoost is a mock offset; train on historical data or document the fallback path clearly).
-2. Harden daemon behavior: heartbeat, graceful shutdown, repeated loop tests, STOP-file behavior, and WebSocket queue integration.
-3. Expand paper execution persistence for no-fill and partial-fill outcomes.
-4. Add live Polymarket integration test that subscribes to WebSocket for 30s and confirms events land on the queue.
-5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met.
+1. **Daemon hardening**: heartbeat task, graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher, WebSocket queue integration.
+2. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
+3. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
+4. **WebSocket integration test**: subscribe to 1 known market for 30s, confirm book updates land on asyncio queue.
+5. **Retrain cadence**: document or automate weekly model refresh (fetch → train → deploy).
+6. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Commands To Run First
 
