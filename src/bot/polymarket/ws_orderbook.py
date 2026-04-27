@@ -16,9 +16,65 @@ from typing import Any
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from bot.polymarket.client import OrderBookSnapshot
+
 DEFAULT_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
 log = logging.getLogger(__name__)
+
+
+class OrderBookCache:
+    """Maintains the latest OrderBookSnapshot per token, updated from WS events.
+
+    Accepts "book" events (full snapshots); ignores other event types.
+    Thread-local — designed for a single asyncio task.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, OrderBookSnapshot] = {}
+        self._stop = asyncio.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def update(self, event: dict[str, Any]) -> None:
+        if event.get("event_type") != "book":
+            return
+        token_id = event.get("asset_id") or event.get("market")
+        if not token_id:
+            return
+        raw_bids = event.get("bids") or []
+        raw_asks = event.get("asks") or []
+        try:
+            bids = sorted(
+                ((float(b["price"]), float(b["size"])) for b in raw_bids),
+                key=lambda x: -x[0],
+            )
+            asks = sorted(
+                ((float(a["price"]), float(a["size"])) for a in raw_asks),
+                key=lambda x: x[0],
+            )
+        except (KeyError, ValueError, TypeError):
+            log.debug("malformed book event for %s, skipping", token_id)
+            return
+        self._cache[token_id] = OrderBookSnapshot(
+            token_id=token_id,
+            bids=bids,
+            asks=asks,
+            timestamp=int(event.get("timestamp") or 0),
+        )
+
+    def get(self, token_id: str) -> OrderBookSnapshot | None:
+        return self._cache.get(token_id)
+
+    async def run(self, queue: asyncio.Queue) -> None:
+        """Consume events from queue until stop() is called."""
+        while not self._stop.is_set():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                self.update(event)
+            except TimeoutError:
+                continue
 
 
 class OrderBookSubscriber:

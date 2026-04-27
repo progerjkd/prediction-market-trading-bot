@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from bot.config import load_settings
 from bot.mock_data import MockPolymarketClient
 from bot.orchestrator import run_once, summary_to_json
+from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber
 from bot.storage.db import open_db
 
 log = logging.getLogger(__name__)
@@ -121,12 +122,18 @@ async def _run_repeating(
     heartbeat_seconds: float = 60.0,
     stop_poll_seconds: float = 1.0,
 ) -> int:
+    ws_queue: asyncio.Queue[dict] = asyncio.Queue()
+    book_cache = OrderBookCache()
+    subscriber = OrderBookSubscriber(token_ids=[], out_queue=ws_queue)
+
     heartbeat_task = asyncio.create_task(
         _heartbeat_loop(shutdown, interval_seconds=heartbeat_seconds)
     )
     stop_task = asyncio.create_task(
         _stop_file_watcher(settings, shutdown, poll_seconds=stop_poll_seconds)
     )
+    cache_task = asyncio.create_task(book_cache.run(ws_queue))
+    ws_task = asyncio.create_task(subscriber.run())
     try:
         while not shutdown.event.is_set():
             summary = await run_once(
@@ -136,6 +143,7 @@ async def _run_repeating(
                 max_markets=max_markets,
                 mock_ai=mock_ai,
                 scan_only=scan_only,
+                book_cache=book_cache,
             )
             log.info("daemon pass summary=%s", summary_to_json(summary))
             if summary.halt_reason:
@@ -149,7 +157,9 @@ async def _run_repeating(
         log.info("daemon shutdown complete: %s", shutdown.reason)
         return 0
     finally:
-        for task in (heartbeat_task, stop_task):
+        subscriber.stop()
+        book_cache.stop()
+        for task in (heartbeat_task, stop_task, cache_task, ws_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

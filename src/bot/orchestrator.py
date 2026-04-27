@@ -15,6 +15,7 @@ from bot.claude.client import ClaudeForecastClient
 from bot.config import RuntimeSettings
 from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
 from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
+from bot.polymarket.ws_orderbook import OrderBookCache
 from bot.skills import ensure_skill_script_paths
 from bot.storage.models import FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
 from bot.storage.repo import (
@@ -73,6 +74,7 @@ async def run_once(
     max_markets: int = 10,
     mock_ai: bool = False,
     scan_only: bool = False,
+    book_cache: OrderBookCache | None = None,
 ) -> RunSummary:
     budget_reason = await _current_halt_reason(conn, settings)
     if budget_reason:
@@ -88,7 +90,7 @@ async def run_once(
         settled = await _settle_expired_trades(conn, client)
 
         markets = await client.list_markets(limit=max_markets, active_only=True)
-        candidates = await _candidates_from_markets(client, markets[:max_markets])
+        candidates = await _candidates_from_markets(client, markets[:max_markets], book_cache=book_cache)
         flagged = filter_tradeable_markets(
             candidates,
             min_volume=settings.scan_min_volume,
@@ -172,16 +174,21 @@ async def run_once(
 async def _candidates_from_markets(
     client: PolymarketClient | Any,
     markets: list[Market],
+    book_cache: OrderBookCache | None = None,
 ) -> list[MarketCandidate]:
     candidates: list[MarketCandidate] = []
     for market in markets:
         if market.closed:
             continue
-        try:
-            book = await client.get_orderbook(market.yes_token)
-        except Exception as exc:
-            log.warning("orderbook fetch failed for %s (%s): %s", market.condition_id, market.yes_token[:12], exc)
-            continue
+        cached = book_cache.get(market.yes_token) if book_cache else None
+        if cached is not None:
+            book = cached
+        else:
+            try:
+                book = await client.get_orderbook(market.yes_token)
+            except Exception as exc:
+                log.warning("orderbook fetch failed for %s (%s): %s", market.condition_id, market.yes_token[:12], exc)
+                continue
         if book.mid is None or book.spread is None:
             log.debug("skipping %s: orderbook has no mid/spread", market.condition_id)
             continue
