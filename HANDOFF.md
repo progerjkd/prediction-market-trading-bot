@@ -2,7 +2,7 @@
 
 ## Current Branch
 
-`feature/partial-fill-persistence`
+`feature/ws-runtime-integration`
 
 ## Key Commits
 
@@ -10,14 +10,16 @@
 - `3c03193` - `feat: resume paper trading MVP pipeline`
 - `f4723a0` - `feat: harden live Polymarket scan path`
 - `da20252` - `feat: XGBoost training pipeline + real inference wired into orchestrator`
-- `ff64429` - `fix: correct script paths in retrain cadence docs`
+- `bb52aeb` - `feat: persist paper partial fill outcomes`
+- `666d4c7` - `feat: integrate websocket orderbook queue runtime`
+- `dc09d8f` - `docs: update handoff for websocket runtime`
 
 ## Current State
 
-- Repository worktree is at `/Users/roger/workspace/pm-bot-partial-fills`.
-- Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
+- Repository worktree is `/Users/roger/workspace/pm-bot-ws-runtime`.
+- Python virtual environment is `.venv`, rebuilt in this worktree with Python 3.12.13 via `uv venv .venv --python 3.12`.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Tests pass: `130 passed`.
+- Tests pass: `134 passed`.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -43,6 +45,17 @@ Observed output (2026-04-26):
 ```
 
 50 markets fetched across 5 pages (pagination working), 10 orderbooks queried, 2 met filter criteria.
+
+- Opt-in WebSocket queue scan smoke works:
+
+```bash
+.venv/bin/python -m bot.daemon --once --paper --scan-only --ws-orderbook --max-markets 2
+```
+
+Observed output (2026-04-26):
+```json
+{"flagged_markets": 0, "halt_reason": null, "paper_trades_written": 0, "predictions_written": 0, "scanned_markets": 10, "skipped_signals": 0}
+```
 
 ## Important Context
 
@@ -92,7 +105,7 @@ Observed output (2026-04-26):
 - `orchestrator._candidates_from_markets`: logs warning on orderbook fetch failure instead of silent swallow.
 - 14 new tests in `tests/test_polymarket_client.py`.
 
-### Partial-fill persistence (working tree, 2026-04-26)
+### Partial-fill persistence (bb52aeb)
 
 - Added `paper_executions` SQLite table for every post-risk paper simulator outcome.
 - Added `PaperExecution` model and `insert_paper_execution()` repository helper.
@@ -101,13 +114,21 @@ Observed output (2026-04-26):
 - No-fills now persist as `paper_executions.status = "NO_FILL"` with no linked trade, so open-position and exposure calculations remain unchanged.
 - Added storage and orchestrator tests for full-fill, partial-fill, and no-fill persistence.
 
+### WebSocket queue runtime integration (666d4c7)
+
+- `OrderBookSubscriber` now sends the documented text `PING` heartbeat and ignores `PONG` frames.
+- `OrderBookSubscriber` accepts `custom_feature_enabled`; runtime subscriptions set it to `False` so unrelated `new_market` events do not pollute the orderbook queue.
+- Added `OrderBookEventCache` and `WebSocketOrderBookClient` in `src/bot/polymarket/ws_orderbook.py`.
+- `WebSocketOrderBookClient` wraps the existing HTTP `PolymarketClient`, starts/stops a subscriber from listed market YES tokens, drains queued `book` and `price_change` events, and falls back to HTTP when no cached snapshot exists.
+- Daemon integration is opt-in with `--ws-orderbook` or `WS_ORDERBOOK_ENABLED=true`; mock-AI smoke mode remains fully local.
+- Diagnosed `tests/test_ws_orderbook.py::test_live_ws_receives_message` timeout/flakiness: the previous hard-coded token now returns HTTP 404 from `/book`, and the test could pass by receiving unrelated `new_market` events. The live test now discovers an active orderbook token, disables custom feature events, and waits specifically for a matching `book` event.
+
 ## Next Highest-Value Work
 
-1. **Daemon hardening**: heartbeat task, graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher, WebSocket queue integration.
+1. **Daemon hardening**: graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher.
 2. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
-3. **WebSocket runtime wiring**: feed live orderbook updates into the daemon loop instead of using only request/response snapshots.
-4. **Retrain automation**: automate weekly model refresh checks (fetch → train → acceptance gate → deploy).
-5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+3. **Retrain automation**: automate weekly model refresh checks (fetch → train → deploy only if acceptance criteria pass).
+4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
 
@@ -174,12 +195,13 @@ If any criterion fails, keep the existing model file in place and investigate da
 ## Commands To Run First
 
 ```bash
-cd /Users/roger/workspace/pm-bot-partial-fills
+cd /Users/roger/workspace/pm-bot-ws-runtime
 git status --short --branch
 source .venv/bin/activate
 .venv/bin/pytest
 .venv/bin/ruff check .
 .venv/bin/python -m bot.daemon --once --paper --mock-ai --max-markets 1
+.venv/bin/python -m bot.daemon --once --paper --scan-only --ws-orderbook --max-markets 2
 ```
 
 ## Suggested Claude Starting Prompt
