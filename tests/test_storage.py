@@ -7,6 +7,7 @@ from bot.storage.db import open_db
 from bot.storage.models import (
     ApiSpend,
     FlaggedMarket,
+    PaperExecution,
     Prediction,
     ResearchBrief,
     Trade,
@@ -16,6 +17,7 @@ from bot.storage.repo import (
     daily_api_cost_usd,
     insert_api_spend,
     insert_flagged_market,
+    insert_paper_execution,
     insert_prediction,
     insert_research_brief,
     insert_trade,
@@ -43,6 +45,7 @@ async def test_schema_creates_tables(db):
     assert "lessons" in names
     assert "metrics_daily" in names
     assert "api_spend" in names
+    assert "paper_executions" in names
 
 
 async def test_insert_and_fetch_flagged_market(db):
@@ -86,6 +89,37 @@ async def test_close_trade_clears_open_count(db):
     tid = await insert_trade(db, trade)
     await close_trade(db, tid, pnl=10.5, outcome="YES")
     assert await open_positions_count(db) == 0
+
+
+async def test_insert_paper_execution_persists_partial_fill_details(db):
+    pred = Prediction(condition_id="c4", token_id="t4", p_model=0.7, p_market=0.5, edge=0.2)
+    pid = await insert_prediction(db, pred)
+    trade = Trade(condition_id="c4", token_id="t4", side="BUY", size=75, limit_price=0.55, prediction_id=pid)
+    tid = await insert_trade(db, trade)
+
+    execution = PaperExecution(
+        condition_id="c4",
+        token_id="t4",
+        side="BUY",
+        requested_size=150,
+        filled_size=75,
+        unfilled_size=75,
+        limit_price=0.55,
+        fill_price=0.55,
+        slippage=0.01,
+        status="PARTIAL_FILL",
+        prediction_id=pid,
+        trade_id=tid,
+    )
+    eid = await insert_paper_execution(db, execution)
+
+    cur = await db.execute(
+        "SELECT prediction_id, trade_id, requested_size, filled_size, unfilled_size, status "
+        "FROM paper_executions WHERE id=?",
+        (eid,),
+    )
+    row = await cur.fetchone()
+    assert row == (pid, tid, 150, 75, 75, "PARTIAL_FILL")
 
 
 async def test_api_spend_tracking(db):

@@ -10,14 +10,16 @@
 - `3c03193` - `feat: resume paper trading MVP pipeline`
 - `f4723a0` - `feat: harden live Polymarket scan path`
 - `da20252` - `feat: XGBoost training pipeline + real inference wired into orchestrator`
+- `bb52aeb` - `feat: persist paper partial fill outcomes`
 - `666d4c7` - `feat: integrate websocket orderbook queue runtime`
+- `dc09d8f` - `docs: update handoff for websocket runtime`
 
 ## Current State
 
 - Repository worktree is `/Users/roger/workspace/pm-bot-ws-runtime`.
 - Python virtual environment is `.venv`, rebuilt in this worktree with Python 3.12.13 via `uv venv .venv --python 3.12`.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Tests pass: `131 passed`.
+- Tests pass: `134 passed`.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -103,6 +105,15 @@ Observed output (2026-04-26):
 - `orchestrator._candidates_from_markets`: logs warning on orderbook fetch failure instead of silent swallow.
 - 14 new tests in `tests/test_polymarket_client.py`.
 
+### Partial-fill persistence (bb52aeb)
+
+- Added `paper_executions` SQLite table for every post-risk paper simulator outcome.
+- Added `PaperExecution` model and `insert_paper_execution()` repository helper.
+- `orchestrator._paper_execute_if_allowed()` now records requested size, filled size, unfilled size, limit price, fill price, slippage, status, and optional linked trade id.
+- Full and partial fills still create `trades` rows for open paper positions.
+- No-fills now persist as `paper_executions.status = "NO_FILL"` with no linked trade, so open-position and exposure calculations remain unchanged.
+- Added storage and orchestrator tests for full-fill, partial-fill, and no-fill persistence.
+
 ### WebSocket queue runtime integration (666d4c7)
 
 - `OrderBookSubscriber` now sends the documented text `PING` heartbeat and ignores `PONG` frames.
@@ -116,9 +127,8 @@ Observed output (2026-04-26):
 
 1. **Daemon hardening**: graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher.
 2. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
-3. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
-4. **Retrain automation**: automate weekly model refresh checks (fetch → train → deploy only if acceptance criteria pass).
-5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+3. **Retrain automation**: automate weekly model refresh checks (fetch → train → deploy only if acceptance criteria pass).
+4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
 
