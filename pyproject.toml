@@ -44,6 +44,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short"
 pythonpath = ["src", ".claude/skills/pm-risk/scripts", ".claude/skills/pm-predict/scripts", ".claude/skills/pm-scan/scripts", ".claude/skills/pm-research/scripts", ".claude/skills/pm-compound/scripts"]
+markers = ["integration: live network tests (deselect with -m 'not integration')"]
 
 [tool.ruff]
 line-length = 100
