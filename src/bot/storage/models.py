@@ -89,6 +89,16 @@ class Lesson:
 
 
 @dataclass
+class OpenTradeRecord:
+    trade_id: int
+    condition_id: str
+    fill_price: float | None
+    size: float
+    slippage: float | None
+    end_date_iso: str | None
+
+
+@dataclass
 class ApiSpend:
     provider: str
     cost_usd: float

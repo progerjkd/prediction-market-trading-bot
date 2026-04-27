@@ -9,6 +9,7 @@ from .models import (
     ApiSpend,
     FlaggedMarket,
     Lesson,
+    OpenTradeRecord,
     Prediction,
     ResearchBrief,
     Trade,
@@ -130,6 +131,31 @@ async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int) -> float:
     )
     row = await cur.fetchone()
     return float(row[0]) if row else 0.0
+
+
+async def fetch_open_trades(conn: aiosqlite.Connection) -> list[OpenTradeRecord]:
+    """Return all open (unclosed) paper trades with their market end_date_iso."""
+    cur = await conn.execute(
+        """
+        SELECT
+            t.id,
+            t.condition_id,
+            t.fill_price,
+            t.size,
+            t.slippage,
+            (
+                SELECT mf.end_date_iso
+                FROM markets_flagged mf
+                WHERE mf.condition_id = t.condition_id
+                ORDER BY mf.flagged_at DESC
+                LIMIT 1
+            ) AS end_date_iso
+        FROM trades t
+        WHERE t.closed_at IS NULL
+        """
+    )
+    rows = await cur.fetchall()
+    return [OpenTradeRecord(trade_id=r[0], condition_id=r[1], fill_price=r[2], size=r[3], slippage=r[4], end_date_iso=r[5]) for r in rows]
 
 
 async def insert_lesson(conn: aiosqlite.Connection, lesson: Lesson) -> int:

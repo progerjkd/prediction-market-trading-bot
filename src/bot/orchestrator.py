@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -15,11 +16,14 @@ from bot.config import RuntimeSettings
 from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
 from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
 from bot.skills import ensure_skill_script_paths
-from bot.storage.models import FlaggedMarket, Prediction, ResearchBrief, Trade
+from bot.storage.models import FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
 from bot.storage.repo import (
+    close_trade,
     daily_api_cost_usd,
     daily_loss_usd,
+    fetch_open_trades,
     insert_flagged_market,
+    insert_lesson,
     insert_prediction,
     insert_research_brief,
     insert_trade,
@@ -38,10 +42,14 @@ from filter_markets import (  # noqa: E402
 from filter_markets import days_to_resolution as _market_days_remaining  # noqa: E402
 from infer_xgboost import infer_probability as xgb_infer  # noqa: E402
 from kelly_size import kelly_size  # noqa: E402
+from postmortem import append_to_failure_log, classify_trade  # noqa: E402
 from prompt_guard import build_research_prompt  # noqa: E402
 from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+
+_FAILURE_LOG_PATH = Path(__file__).parent.parent.parent / ".claude/skills/pm-compound/references/failure_log.md"
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,7 @@ class RunSummary:
     predictions_written: int = 0
     paper_trades_written: int = 0
     skipped_signals: int = 0
+    trades_settled: int = 0
     halt_reason: str | None = None
 
 
@@ -75,6 +84,8 @@ async def run_once(
     )
     forecaster = claude_client or ClaudeForecastClient()
     try:
+        settled = await _settle_expired_trades(conn, client)
+
         markets = await client.list_markets(limit=max_markets, active_only=True)
         candidates = await _candidates_from_markets(client, markets[:max_markets])
         flagged = filter_tradeable_markets(
@@ -89,7 +100,7 @@ async def run_once(
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
 
         if scan_only:
-            return RunSummary(scanned_markets=len(markets), flagged_markets=len(flagged))
+            return RunSummary(scanned_markets=len(markets), flagged_markets=len(flagged), trades_settled=settled)
 
         predictions_written = 0
         trades_written = 0
@@ -145,6 +156,7 @@ async def run_once(
             predictions_written=predictions_written,
             paper_trades_written=trades_written,
             skipped_signals=skipped,
+            trades_settled=settled,
         )
     finally:
         if owns_client:
@@ -310,6 +322,77 @@ async def _paper_execute_if_allowed(
         is_paper=True,
         prediction_id=prediction_id,
     )
+
+
+async def _settle_expired_trades(
+    conn: aiosqlite.Connection,
+    client: Any,
+    *,
+    failure_log_path: Path | None = None,
+) -> int:
+    """Close paper trades whose markets have resolved; run postmortem on each."""
+    log_path = failure_log_path or _FAILURE_LOG_PATH
+    open_trades = await fetch_open_trades(conn)
+    now = int(time.time())
+    settled = 0
+
+    for record in open_trades:
+        if not _is_expired(record.end_date_iso, now):
+            continue
+
+        try:
+            resolution = await client.get_market_resolution(record.condition_id)
+        except Exception as exc:
+            log.warning("resolution check failed for %s: %s", record.condition_id, exc)
+            continue
+
+        if not resolution.resolved:
+            continue
+
+        final_price = resolution.final_yes_price if resolution.final_yes_price is not None else 0.0
+        fill = record.fill_price or 0.0
+        pnl = (final_price - fill) * record.size
+        outcome = "YES" if final_price >= 0.5 else "NO"
+
+        await close_trade(conn, record.trade_id, pnl=pnl, outcome=outcome)
+
+        cause, rule = classify_trade(pnl, record.slippage)
+        await insert_lesson(
+            conn,
+            Lesson(trade_id=record.trade_id, cause=cause, rule_proposed=rule, notes=f"auto-settled; outcome={outcome}"),
+        )
+        log.info(
+            "settled trade %d: %s pnl=%.2f cause=%s",
+            record.trade_id, outcome, pnl, cause,
+        )
+
+        try:
+            append_to_failure_log(
+                log_path=log_path,
+                condition_id=record.condition_id,
+                trade_id=record.trade_id,
+                outcome=outcome,
+                pnl=pnl,
+                cause=cause,
+                rule_proposed=rule,
+            )
+        except Exception as exc:
+            log.warning("failed to append failure log for trade %d: %s", record.trade_id, exc)
+
+        settled += 1
+
+    return settled
+
+
+def _is_expired(end_date_iso: str | None, now: int) -> bool:
+    if not end_date_iso:
+        return False
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
+        return dt.timestamp() < now
+    except (ValueError, TypeError):
+        return False
 
 
 async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSettings) -> str | None:
