@@ -58,6 +58,7 @@ class RunSummary:
     flagged_markets: int = 0
     predictions_written: int = 0
     paper_trades_written: int = 0
+    no_fill_trades: int = 0
     skipped_signals: int = 0
     trades_settled: int = 0
     halt_reason: str | None = None
@@ -104,6 +105,7 @@ async def run_once(
 
         predictions_written = 0
         trades_written = 0
+        no_fill_trades = 0
         skipped = 0
         for candidate in flagged:
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
@@ -146,6 +148,9 @@ async def run_once(
             )
             if trade is None:
                 skipped += 1
+            elif trade.outcome == "no_fill":
+                await insert_trade(conn, trade)
+                no_fill_trades += 1
             else:
                 await insert_trade(conn, trade)
                 trades_written += 1
@@ -155,6 +160,7 @@ async def run_once(
             flagged_markets=len(flagged),
             predictions_written=predictions_written,
             paper_trades_written=trades_written,
+            no_fill_trades=no_fill_trades,
             skipped_signals=skipped,
             trades_settled=settled,
         )
@@ -309,8 +315,24 @@ async def _paper_execute_if_allowed(
     limit_price = min(0.99, max(candidate.mid_price, (book.best_ask or candidate.mid_price)))
     shares = size_usd / limit_price
     fill = simulate_fill(orderbook, side=Side.BUY, size=shares, limit_price=limit_price)
+    now = int(time.time())
     if fill.filled_size <= 0:
-        return None
+        return Trade(
+            condition_id=candidate.condition_id,
+            token_id=candidate.yes_token,
+            side="BUY",
+            size=0.0,
+            limit_price=limit_price,
+            fill_price=None,
+            slippage=None,
+            intended_size=shares,
+            is_paper=True,
+            prediction_id=prediction_id,
+            opened_at=now,
+            closed_at=now,
+            pnl=0.0,
+            outcome="no_fill",
+        )
     return Trade(
         condition_id=candidate.condition_id,
         token_id=candidate.yes_token,
@@ -319,6 +341,7 @@ async def _paper_execute_if_allowed(
         limit_price=limit_price,
         fill_price=fill.avg_price,
         slippage=fill.slippage,
+        intended_size=shares,
         is_paper=True,
         prediction_id=prediction_id,
     )

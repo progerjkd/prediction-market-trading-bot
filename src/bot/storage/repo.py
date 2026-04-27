@@ -81,11 +81,12 @@ async def insert_trade(conn: aiosqlite.Connection, t: Trade) -> int:
     cur = await conn.execute(
         "INSERT INTO trades "
         "(prediction_id, condition_id, token_id, side, size, limit_price, fill_price, "
-        " slippage, is_paper, opened_at, closed_at, pnl, outcome) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " slippage, intended_size, is_paper, opened_at, closed_at, pnl, outcome) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             t.prediction_id, t.condition_id, t.token_id, t.side, t.size, t.limit_price,
-            t.fill_price, t.slippage, int(t.is_paper), t.opened_at, t.closed_at, t.pnl, t.outcome,
+            t.fill_price, t.slippage, t.intended_size, int(t.is_paper), t.opened_at,
+            t.closed_at, t.pnl, t.outcome,
         ),
     )
     await conn.commit()

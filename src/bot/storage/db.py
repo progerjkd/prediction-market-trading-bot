@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS trades (
     limit_price REAL NOT NULL,
     fill_price REAL,
     slippage REAL,
+    intended_size REAL,
     is_paper INTEGER NOT NULL DEFAULT 1,
     opened_at INTEGER NOT NULL,
     closed_at INTEGER,
@@ -114,6 +115,10 @@ CREATE TABLE IF NOT EXISTS book_snapshots (
 CREATE INDEX IF NOT EXISTS idx_book_token_time ON book_snapshots(token_id, captured_at DESC);
 """
 
+TRADES_EXTRA_COLUMNS = {
+    "intended_size": "REAL",
+}
+
 MARKETS_FLAGGED_EXTRA_COLUMNS = {
     "question": "TEXT",
     "end_date_iso": "TEXT",
@@ -132,12 +137,21 @@ async def open_db(path: Path | str = DEFAULT_DB_PATH) -> aiosqlite.Connection:
     await conn.execute("PRAGMA foreign_keys=ON")
     await conn.executescript(SCHEMA)
     await _ensure_markets_flagged_columns(conn)
+    await _ensure_trades_columns(conn)
     await conn.commit()
     return conn
 
 
 def db_path_from_env() -> Path:
     return Path(os.environ.get("BOT_DB_PATH", str(DEFAULT_DB_PATH)))
+
+
+async def _ensure_trades_columns(conn: aiosqlite.Connection) -> None:
+    cur = await conn.execute("PRAGMA table_info(trades)")
+    existing = {row[1] for row in await cur.fetchall()}
+    for name, column_type in TRADES_EXTRA_COLUMNS.items():
+        if name not in existing:
+            await conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {column_type}")
 
 
 async def _ensure_markets_flagged_columns(conn: aiosqlite.Connection) -> None:

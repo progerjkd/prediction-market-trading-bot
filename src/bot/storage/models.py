@@ -71,6 +71,7 @@ class Trade:
     prediction_id: int | None = None
     fill_price: float | None = None
     slippage: float | None = None
+    intended_size: float | None = None
     opened_at: int = field(default_factory=lambda: int(time.time()))
     closed_at: int | None = None
     pnl: float | None = None
