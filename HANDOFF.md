@@ -111,7 +111,7 @@ Retrain weekly, or whenever 500+ new resolved markets have accumulated since the
 ```bash
 # Step 1 — Fetch resolved markets from the Gamma API
 # Appends to data/training_data.csv (overwrites by default)
-.venv/bin/python scripts/fetch_resolved_markets.py \
+.venv/bin/python .claude/skills/pm-predict/scripts/fetch_resolved_markets.py \
     --output data/training_data.csv \
     --start-offset 14000 \
     --max-pages 100 \
@@ -131,7 +131,7 @@ Name: label, dtype: int64
 ```bash
 # Step 2 — Train XGBClassifier on the fetched data
 # Saves model to data/models/xgboost.json (overwrites previous model)
-.venv/bin/python scripts/train_xgboost.py \
+.venv/bin/python .claude/skills/pm-predict/scripts/train_xgboost.py \
     --data data/training_data.csv \
     --model-out data/models/xgboost.json \
     --test-size 0.20
