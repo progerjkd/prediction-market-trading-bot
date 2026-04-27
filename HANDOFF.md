@@ -100,6 +100,68 @@ Observed output (2026-04-26):
 5. **Retrain cadence**: document or automate weekly model refresh (fetch → train → deploy).
 6. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
+## Retrain Cadence
+
+### Trigger
+
+Retrain weekly, or whenever 500+ new resolved markets have accumulated since the last training run. The last run fetched **9,983 resolved markets** (85.7% holdout accuracy). Check accumulation by comparing `data/training_data.csv` row count against the previous run.
+
+### Command Sequence
+
+```bash
+# Step 1 — Fetch resolved markets from the Gamma API
+# Appends to data/training_data.csv (overwrites by default)
+.venv/bin/python scripts/fetch_resolved_markets.py \
+    --output data/training_data.csv \
+    --start-offset 14000 \
+    --max-pages 100 \
+    --page-size 100
+```
+
+Expected output shape:
+
+```
+saved 9983 rows → data/training_data.csv
+label distribution:
+1    5241
+0    4742
+Name: label, dtype: int64
+```
+
+```bash
+# Step 2 — Train XGBClassifier on the fetched data
+# Saves model to data/models/xgboost.json (overwrites previous model)
+.venv/bin/python scripts/train_xgboost.py \
+    --data data/training_data.csv \
+    --model-out data/models/xgboost.json \
+    --test-size 0.20
+```
+
+Expected output shape:
+
+```json
+{
+  "n_train": 7986,
+  "n_test": 1997,
+  "accuracy": 0.857,
+  "model_path": "data/models/xgboost.json"
+}
+```
+
+### Acceptance Criteria
+
+Deploy the new `data/models/xgboost.json` only if:
+
+- Holdout accuracy >= **80%** on the 20% test split.
+- Label distribution is not severely skewed (neither class below 30% of total rows).
+- Row count has increased relative to the previous training run (confirming new data was fetched).
+
+If any criterion fails, keep the existing model file in place and investigate data quality before retraining.
+
+### Fallback Behavior
+
+`infer_xgboost.py` handles a missing or corrupt model file gracefully. If `data/models/xgboost.json` is absent it returns `(current_mid, source="xgboost_model_missing")`, so the daemon continues running using only the Claude component of the ensemble (effective weight shifts to Claude 1.0 / XGBoost 0.0). No crash or halt occurs.
+
 ## Commands To Run First
 
 ```bash
