@@ -6,6 +6,8 @@ gated behind LIVE_TRADING — v1 ships with that flag forced off.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +16,8 @@ import httpx
 
 DEFAULT_HOST = "https://clob.polymarket.com"
 DEFAULT_GAMMA = "https://gamma-api.polymarket.com"
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,10 +69,14 @@ class PolymarketClient:
         host: str | None = None,
         gamma_host: str | None = None,
         timeout: float = 30.0,
+        max_retries: int = 3,
+        retry_base_delay: float = 1.0,
     ):
         self.host = (host or os.environ.get("CLOB_HOST", DEFAULT_HOST)).rstrip("/")
         self.gamma = (gamma_host or os.environ.get("GAMMA_HOST", DEFAULT_GAMMA)).rstrip("/")
         self._http = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+        self._max_retries = max_retries
+        self._retry_base_delay = retry_base_delay
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -79,37 +87,102 @@ class PolymarketClient:
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
 
-    async def list_markets(self, limit: int = 100, active_only: bool = True) -> list[Market]:
-        """Fetch active markets from Gamma (the queryable index)."""
-        params = {"limit": limit, "closed": "false" if active_only else "true"}
-        if active_only:
-            params["active"] = "true"
-        resp = await self._http.get(f"{self.gamma}/markets", params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        markets: list[Market] = []
-        for m in data:
-            tokens = _parse_clob_token_ids(m)
-            if not tokens:
-                continue
-            yes_token, no_token = tokens
-            markets.append(
-                Market(
-                    condition_id=m.get("conditionId") or m.get("id", ""),
-                    question=m.get("question", ""),
-                    yes_token=yes_token,
-                    no_token=no_token,
-                    end_date_iso=m.get("endDate") or m.get("endDateIso"),
-                    volume_24h=float(m.get("volume24hr") or 0),
-                    liquidity=float(m.get("liquidity") or 0),
-                    closed=bool(m.get("closed", False)),
-                    raw=m,
+    async def _get_with_retry(self, url: str, params: dict | None = None) -> httpx.Response:
+        """GET with exponential-backoff retry on transport errors and 5xx responses."""
+        for attempt in range(self._max_retries):
+            is_last = attempt == self._max_retries - 1
+            try:
+                resp = await self._http.get(url, params=params)
+                if resp.status_code < 500:
+                    return resp
+                # 5xx: raise on last attempt, otherwise back off and retry
+                if is_last:
+                    resp.raise_for_status()
+                delay = self._retry_base_delay * (2**attempt)
+                log.warning(
+                    "server error %d (attempt %d/%d), retrying in %.1fs",
+                    resp.status_code,
+                    attempt + 1,
+                    self._max_retries,
+                    delay,
                 )
-            )
-        return markets
+                await asyncio.sleep(delay)
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                if is_last:
+                    raise
+                delay = self._retry_base_delay * (2**attempt)
+                log.warning(
+                    "transport error (attempt %d/%d): %s, retrying in %.1fs",
+                    attempt + 1,
+                    self._max_retries,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise RuntimeError("retry loop exhausted without returning")  # unreachable
+
+    async def list_markets(
+        self,
+        limit: int = 100,
+        active_only: bool = True,
+        max_pages: int = 5,
+    ) -> list[Market]:
+        """Fetch markets from Gamma with offset pagination and retry.
+
+        active_only=True sends closed=false&active=true.
+        active_only=False fetches all markets (no closed filter).
+        """
+        params: dict[str, str | int] = {}
+        if active_only:
+            params["closed"] = "false"
+            params["active"] = "true"
+        # active_only=False: omit closed/active filters to see all markets
+
+        all_markets: list[Market] = []
+        for page in range(max_pages):
+            params["limit"] = limit
+            params["offset"] = page * limit
+            resp = await self._get_with_retry(f"{self.gamma}/markets", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Gamma may return a plain list or a paginated dict
+            if isinstance(data, list):
+                items = data
+            else:
+                items = data.get("data") or data.get("markets") or []
+
+            for m in items:
+                market = self._parse_market(m)
+                if market is not None:
+                    all_markets.append(market)
+
+            log.debug("page %d: fetched %d items (total so far: %d)", page, len(items), len(all_markets))
+            if len(items) < limit:
+                break
+
+        return all_markets
+
+    def _parse_market(self, m: dict[str, Any]) -> Market | None:
+        tokens = _parse_clob_token_ids(m)
+        if not tokens:
+            log.debug("skipping market without valid token ids: %s", m.get("conditionId", "?"))
+            return None
+        yes_token, no_token = tokens
+        return Market(
+            condition_id=m.get("conditionId") or m.get("id", ""),
+            question=m.get("question", ""),
+            yes_token=yes_token,
+            no_token=no_token,
+            end_date_iso=m.get("endDate") or m.get("endDateIso"),
+            volume_24h=float(m.get("volume24hr") or 0),
+            liquidity=float(m.get("liquidity") or 0),
+            closed=bool(m.get("closed", False)),
+            raw=m,
+        )
 
     async def get_orderbook(self, token_id: str) -> OrderBookSnapshot:
-        resp = await self._http.get(f"{self.host}/book", params={"token_id": token_id})
+        resp = await self._get_with_retry(f"{self.host}/book", params={"token_id": token_id})
         resp.raise_for_status()
         data = resp.json()
         asks = sorted(
@@ -128,7 +201,7 @@ class PolymarketClient:
         )
 
     async def get_midpoint(self, token_id: str) -> float | None:
-        resp = await self._http.get(f"{self.host}/midpoint", params={"token_id": token_id})
+        resp = await self._get_with_retry(f"{self.host}/midpoint", params={"token_id": token_id})
         resp.raise_for_status()
         data = resp.json()
         mid = data.get("mid")

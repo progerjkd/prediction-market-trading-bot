@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +38,8 @@ from filter_markets import (  # noqa: E402
 from kelly_size import kelly_size  # noqa: E402
 from prompt_guard import build_research_prompt  # noqa: E402
 from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -156,9 +159,11 @@ async def _candidates_from_markets(
             continue
         try:
             book = await client.get_orderbook(market.yes_token)
-        except Exception:
+        except Exception as exc:
+            log.warning("orderbook fetch failed for %s (%s): %s", market.condition_id, market.yes_token[:12], exc)
             continue
         if book.mid is None or book.spread is None:
+            log.debug("skipping %s: orderbook has no mid/spread", market.condition_id)
             continue
         candidates.append(
             MarketCandidate(
