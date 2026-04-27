@@ -8,7 +8,7 @@
 
 At the start of each session, identify 2–4 independent backlog tasks and dispatch one agent per task in parallel:
 
-```
+```text
 You (orchestrator)
 ├── Agent "task-A" → isolated worktree branch
 ├── Agent "task-B" → isolated worktree branch
@@ -18,6 +18,7 @@ You review → integrate → full test suite → merge
 ```
 
 **Invocation pattern:**
+
 ```python
 Agent(
     team_name="pm-sprint",
@@ -33,8 +34,8 @@ Agent(
 
 Only truly independent tasks run in parallel. For this codebase:
 
-| Independent (parallelize freely) | Shared (one agent at a time) |
-|----------------------------------|------------------------------|
+| Independent (parallelize freely)            | Shared (one agent at a time) |
+| ------------------------------------------- | ---------------------------- |
 | `.claude/skills/pm-*/` (each skill is its own domain) | `src/bot/orchestrator.py` |
 | `tests/` files (each test file is independent) | `src/bot/daemon.py` |
 | `src/bot/polymarket/` | `src/bot/storage/db.py` |

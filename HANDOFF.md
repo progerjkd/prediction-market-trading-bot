@@ -16,7 +16,9 @@
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Tests pass: `124 passed`.
+- Deterministic tests pass: `131 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Full test suite includes a live WebSocket integration test; latest full-suite run and isolated retry
+  both timed out waiting for a live message after 30s.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -91,14 +93,24 @@ Observed output (2026-04-26):
 - `orchestrator._candidates_from_markets`: logs warning on orderbook fetch failure instead of silent swallow.
 - 14 new tests in `tests/test_polymarket_client.py`.
 
+### Daemon hardening
+
+- `daemon.py` long-running mode now has an internal shutdown controller.
+- SIGTERM/SIGINT request graceful shutdown; the daemon finishes any in-flight pass and does not start
+  another pass.
+- A log-only heartbeat task emits periodic `daemon heartbeat` messages in repeated mode.
+- A STOP-file watcher polls `RuntimeSettings.stop_file` and wakes scan-interval sleep promptly when
+  the kill switch appears.
+- `tests/test_daemon.py` now covers repeated loop passes, halt summaries, STOP-file shutdown,
+  signal-triggered shutdown state, heartbeat logging, and once-mode smoke behavior.
+
 ## Next Highest-Value Work
 
-1. **Daemon hardening**: heartbeat task, graceful shutdown on SIGTERM, repeated-loop tests, STOP-file watcher, WebSocket queue integration.
-2. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
-3. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
-4. **WebSocket integration test**: subscribe to 1 known market for 30s, confirm book updates land on asyncio queue.
-5. **Retrain cadence**: document or automate weekly model refresh (fetch → train → deploy).
-6. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+1. **Compound/postmortem loop**: close positions, run Claude postmortem, append to `failure_log.md` and `lessons` table.
+2. **Partial-fill persistence**: record no-fill / partial-fill outcomes from paper simulator; currently only full fills are saved.
+3. **WebSocket queue runtime integration**: feed live orderbook queue updates into daemon/orchestrator flow instead of only testing the subscriber.
+4. **Retrain automation**: automate weekly model refresh guardrails (fetch → train → deploy only if acceptance criteria pass).
+5. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
 
@@ -169,6 +181,7 @@ cd /Users/roger/workspace/prediction-market-trading-bot
 git status --short --branch
 source .venv/bin/activate
 .venv/bin/pytest
+.venv/bin/pytest -m 'not integration'
 .venv/bin/ruff check .
 .venv/bin/python -m bot.daemon --once --paper --mock-ai --max-markets 1
 ```
