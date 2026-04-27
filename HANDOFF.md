@@ -32,6 +32,7 @@ Expected smoke output shape:
 
 - Original Claude plan: `/Users/roger/.claude/plans/please-refer-to-the-wobbly-whale.md`
 - Local guide PDF: `How to Build an AI-Powered Prediction Market Trading Bot Using Claude Skills.pdf`
+- Multi-AI workflow guide: `docs/AI_COLLABORATION.md`
 - V1 scope remains Polymarket-only, Python, XGBoost + Claude hybrid, always-on daemon, paper trading only.
 - Live trading is intentionally forced disabled in `RuntimeSettings.live_trading_enabled`, even if `LIVE_TRADING=true`.
 - Polymarket dependency was updated to `py-clob-client-v2>=1.0.0` for the CLOB V2 migration.
