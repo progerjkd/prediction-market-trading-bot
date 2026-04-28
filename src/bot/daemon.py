@@ -10,10 +10,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
+from retrain import retrain, retrain_needed  # noqa: E402
 
 from bot.config import load_settings
 from bot.mock_data import MockPolymarketClient
-from bot.orchestrator import run_once, summary_to_json
+from bot.orchestrator import (  # noqa: E402 (triggers ensure_skill_script_paths)
+    run_once,
+    summary_to_json,
+)
 from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber
 from bot.storage.db import open_db
 from bot.storage.repo import acceptance_criteria_met, recent_daily_metrics
@@ -41,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-only", action="store_true", help="Only scan and persist flagged markets")
     parser.add_argument("--max-markets", type=int, default=10, help="Maximum markets to inspect per pass")
     parser.add_argument("--status", action="store_true", help="Print recent metrics and acceptance gate, then exit")
+    parser.add_argument("--check-retrain", action="store_true", help="Retrain XGBoost if 500+ new rows; exit")
     return parser
 
 
@@ -168,6 +173,19 @@ async def _run_repeating(
                 await task
 
 
+def run_retrain_pipeline(settings) -> dict:
+    """Fetch current CSV, run retrain() with guardrails, return result dict."""
+    import pandas as pd
+
+    csv_path = settings.training_data_path
+    model_path = settings.xgboost_model_path
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:
+        return {"ok": False, "reason": f"could not load {csv_path}: {exc}", "metrics": {}}
+    return retrain(df, model_path=model_path)
+
+
 async def _print_status(conn) -> None:
     rows = await recent_daily_metrics(conn, days=7)
     print("=== Recent daily metrics (last 7 days) ===")
@@ -204,6 +222,22 @@ async def async_main(argv: list[str] | None = None) -> int:
     try:
         if args.status:
             await _print_status(conn)
+            return 0
+
+        if args.check_retrain:
+            meta_path = settings.xgboost_model_path.with_suffix(".meta.json")
+            if not retrain_needed(
+                csv_path=settings.training_data_path,
+                meta_path=meta_path,
+            ):
+                print("retrain not needed — fewer than 500 new rows since last run")
+                return 0
+            result = run_retrain_pipeline(settings)
+            if result["ok"]:
+                m = result["metrics"]
+                print(f"[OK] model deployed — accuracy={m.get('accuracy', '?'):.3f}")
+            else:
+                print(f"[SKIP] model NOT deployed: {result['reason']}")
             return 0
 
         if args.once:

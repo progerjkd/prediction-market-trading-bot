@@ -90,6 +90,37 @@ def retrain(
     return {"ok": True, "reason": "", "metrics": metrics}
 
 
+def retrain_needed(
+    *,
+    csv_path: Path | str,
+    meta_path: Path | str,
+    min_new_rows: int = 500,
+) -> bool:
+    """Return True if the CSV has grown by at least min_new_rows since the last training run."""
+    csv_path = Path(csv_path)
+    meta_path = Path(meta_path)
+
+    if not csv_path.exists():
+        return False
+
+    import pandas as pd
+    try:
+        current_rows = len(pd.read_csv(csv_path))
+    except Exception:
+        return False
+
+    if not meta_path.exists():
+        return current_rows >= min_new_rows
+
+    try:
+        meta = json.loads(meta_path.read_text())
+        prev_rows = int(meta.get("n_rows", 0))
+    except Exception:
+        return current_rows >= min_new_rows
+
+    return (current_rows - prev_rows) >= min_new_rows
+
+
 def main() -> None:
     import argparse
 

@@ -47,6 +47,7 @@ class RuntimeSettings:
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
     xgboost_model_path: Path = Path("data/models/xgboost.json")
+    training_data_path: Path = Path("data/training_data.csv")
 
     @property
     def live_trading_enabled(self) -> bool:
