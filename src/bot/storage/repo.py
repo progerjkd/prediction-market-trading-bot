@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 import aiosqlite
 
@@ -194,7 +194,8 @@ async def daily_api_cost_usd(conn: aiosqlite.Connection, since_ts: int) -> float
 async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> None:
     """Compute and upsert metrics for date_str (ISO format: '2026-04-27') into metrics_daily."""
     d = date.fromisoformat(date_str)
-    day_start = int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp())
+    # Use local midnight so trade timestamps (which use time.time()) align with the date window
+    day_start = int(datetime(d.year, d.month, d.day).timestamp())
     day_end = day_start + 86_400
 
     cur = await conn.execute(
