@@ -8,6 +8,7 @@ STOP_FILE="${STOP_FILE:-data/STOP}"
 LOG_FILE="${PM_BOT_LOG_FILE:-data/logs/paper-daemon.log}"
 MAX_MARKETS="${MAX_MARKETS:-10}"
 STATUS_INTERVAL_SECONDS="${STATUS_INTERVAL_SECONDS:-300}"
+STATUS_INITIAL_DELAY_SECONDS="${STATUS_INITIAL_DELAY_SECONDS:-10}"
 
 cd "$ROOT"
 
@@ -31,6 +32,7 @@ Environment:
   PM_BOT_LOG_FILE           log path (default: data/logs/paper-daemon.log)
   MAX_MARKETS               daemon max markets per pass (default: 10)
   STATUS_INTERVAL_SECONDS   status pane refresh interval (default: 300)
+  STATUS_INITIAL_DELAY_SECONDS  initial status pane delay after daemon start (default: 10)
 EOF
 }
 
@@ -58,8 +60,13 @@ daemon_command() {
 }
 
 status_command() {
-  printf 'cd %q && while true; do clear; date; LIVE_TRADING=false BOT_DB_PATH=%q STOP_FILE=%q .venv/bin/python -m bot.daemon --paper --status; sleep %q; done' \
-    "$ROOT" "$DB_PATH" "$STOP_FILE" "$STATUS_INTERVAL_SECONDS"
+  printf 'cd %q && sleep %q; while true; do clear; date; LIVE_TRADING=false BOT_DB_PATH=%q STOP_FILE=%q .venv/bin/python -m bot.daemon --paper --status; sleep %q; done' \
+    "$ROOT" "$STATUS_INITIAL_DELAY_SECONDS" "$DB_PATH" "$STOP_FILE" "$STATUS_INTERVAL_SECONDS"
+}
+
+initialize_db() {
+  LIVE_TRADING=false BOT_DB_PATH="$DB_PATH" STOP_FILE="$STOP_FILE" \
+    .venv/bin/python -m bot.daemon --paper --status >/dev/null
 }
 
 start() {
@@ -78,6 +85,8 @@ start() {
     echo "Attach with: scripts/paper-daemon attach"
     exit 0
   fi
+
+  initialize_db
 
   tmux new-session -d -s "$SESSION" -n paper
   tmux send-keys -t "$SESSION:paper.0" "$(daemon_command)" C-m
