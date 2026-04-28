@@ -39,6 +39,7 @@ from bot.storage.repo import (
     insert_prediction,
     insert_research_brief,
     insert_trade,
+    net_realized_pnl,
     open_condition_ids,
     open_positions_count,
     persist_daily_metrics,
@@ -365,7 +366,8 @@ async def _paper_execute_if_allowed(
     p_model: float,
     p_market: float,
 ) -> _PaperExecutionPlan | None:
-    size_usd = _proposed_size_usd(p_model=p_model, p_market=p_market, settings=settings)
+    bankroll = await effective_bankroll_usd(conn, base_bankroll=settings.bankroll_usdc)
+    size_usd = _proposed_size_usd_with_bankroll(p_model=p_model, p_market=p_market, settings=settings, bankroll=bankroll)
     if size_usd <= 0:
         return None
 
@@ -377,7 +379,7 @@ async def _paper_execute_if_allowed(
             p_market=p_market,
             b=_net_odds_from_price(p_market),
             size_usd=size_usd,
-            bankroll_usd=settings.bankroll_usdc,
+            bankroll_usd=bankroll,
             open_positions=await open_positions_count(conn),
             total_exposure_usd=await total_open_exposure(conn),
             daily_loss_usd=await daily_loss_usd(conn, day_start),
@@ -598,14 +600,34 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
 
 
 def _proposed_size_usd(*, p_model: float, p_market: float, settings: RuntimeSettings) -> float:
+    return _proposed_size_usd_with_bankroll(
+        p_model=p_model, p_market=p_market, settings=settings, bankroll=settings.bankroll_usdc
+    )
+
+
+def _proposed_size_usd_with_bankroll(
+    *, p_model: float, p_market: float, settings: RuntimeSettings, bankroll: float
+) -> float:
     kelly_cap = kelly_size(
         p=p_model,
         b=_net_odds_from_price(p_market),
-        bankroll=settings.bankroll_usdc,
+        bankroll=bankroll,
         fraction=settings.kelly_fraction,
     )
-    position_cap = settings.max_position_pct * settings.bankroll_usdc
+    position_cap = settings.max_position_pct * bankroll
     return min(100.0, kelly_cap, position_cap)
+
+
+async def effective_bankroll_usd(
+    conn: aiosqlite.Connection,
+    *,
+    base_bankroll: float,
+    floor_fraction: float = 0.10,
+) -> float:
+    """Base bankroll adjusted for all realized P&L; floored at floor_fraction of base."""
+    pnl = await net_realized_pnl(conn)
+    floor = base_bankroll * floor_fraction
+    return max(floor, base_bankroll + pnl)
 
 
 def _net_odds_from_price(price: float) -> float:
