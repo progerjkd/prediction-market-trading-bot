@@ -14,10 +14,18 @@ from bot.budgets import BudgetLimits, RuntimeBudgetSnapshot, halt_reason
 from bot.claude.client import ClaudeForecastClient
 from bot.config import RuntimeSettings
 from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
-from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
+from bot.polymarket.client import Market, MarketResolution, OrderBookSnapshot, PolymarketClient
 from bot.polymarket.ws_orderbook import OrderBookCache
 from bot.skills import ensure_skill_script_paths
-from bot.storage.models import ApiSpend, FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
+from bot.storage.models import (
+    ApiSpend,
+    FlaggedMarket,
+    Lesson,
+    PaperExecution,
+    Prediction,
+    ResearchBrief,
+    Trade,
+)
 from bot.storage.repo import (
     close_trade,
     daily_api_cost_usd,
@@ -26,6 +34,7 @@ from bot.storage.repo import (
     insert_api_spend,
     insert_flagged_market,
     insert_lesson,
+    insert_paper_execution,
     insert_prediction,
     insert_research_brief,
     insert_trade,
@@ -53,7 +62,7 @@ from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
 log = logging.getLogger(__name__)
 
 
-_FAILURE_LOG_PATH = Path(__file__).parent.parent.parent / ".claude/skills/pm-compound/references/failure_log.md"
+FAILURE_LOG_PATH = Path(__file__).parent.parent.parent / ".claude/skills/pm-compound/references/failure_log.md"
 
 
 @dataclass(frozen=True)
@@ -65,8 +74,16 @@ class RunSummary:
     no_fill_trades: int = 0
     skipped_signals: int = 0
     trades_settled: int = 0
+    closed_positions: int = 0
+    lessons_written: int = 0
     halt_reason: str | None = None
     flagged_yes_tokens: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _PaperExecutionPlan:
+    execution: PaperExecution
+    trade: Trade | None = None
 
 
 async def run_once(
@@ -111,6 +128,8 @@ async def run_once(
                 scanned_markets=len(markets),
                 flagged_markets=len(flagged),
                 trades_settled=settled,
+                closed_positions=settled,
+                lessons_written=settled,
                 flagged_yes_tokens=[c.yes_token for c in flagged],
             )
 
@@ -156,7 +175,7 @@ async def run_once(
                 skipped += 1
                 continue
 
-            trade = await _paper_execute_if_allowed(
+            execution_plan = await _paper_execute_if_allowed(
                 conn=conn,
                 client=client,
                 settings=settings,
@@ -165,13 +184,16 @@ async def run_once(
                 p_model=decision.p_model,
                 p_market=decision.p_market,
             )
-            if trade is None:
+            if execution_plan is None:
                 skipped += 1
-            elif trade.outcome == "no_fill":
-                await insert_trade(conn, trade)
+            elif execution_plan.trade is None:
+                await insert_paper_execution(conn, execution_plan.execution)
                 no_fill_trades += 1
+                skipped += 1
             else:
-                await insert_trade(conn, trade)
+                trade_id = await insert_trade(conn, execution_plan.trade)
+                execution_plan.execution.trade_id = trade_id
+                await insert_paper_execution(conn, execution_plan.execution)
                 trades_written += 1
 
         today = _today_iso()
@@ -185,6 +207,8 @@ async def run_once(
             no_fill_trades=no_fill_trades,
             skipped_signals=skipped,
             trades_settled=settled,
+            closed_positions=settled,
+            lessons_written=settled,
             flagged_yes_tokens=[c.yes_token for c in flagged],
         )
     finally:
@@ -314,7 +338,7 @@ async def _paper_execute_if_allowed(
     prediction_id: int,
     p_model: float,
     p_market: float,
-) -> Trade | None:
+) -> _PaperExecutionPlan | None:
     size_usd = _proposed_size_usd(p_model=p_model, p_market=p_market, settings=settings)
     if size_usd <= 0:
         return None
@@ -355,24 +379,27 @@ async def _paper_execute_if_allowed(
     shares = size_usd / limit_price
     fill = simulate_fill(orderbook, side=Side.BUY, size=shares, limit_price=limit_price)
     now = int(time.time())
+    status = "FULL_FILL"
+    if fill.unfilled_size > 0:
+        status = "PARTIAL_FILL"
+    execution = PaperExecution(
+        condition_id=candidate.condition_id,
+        token_id=candidate.yes_token,
+        side="BUY",
+        requested_size=shares,
+        filled_size=fill.filled_size,
+        unfilled_size=fill.unfilled_size,
+        limit_price=limit_price,
+        fill_price=fill.avg_price if fill.filled_size > 0 else None,
+        slippage=fill.slippage if fill.filled_size > 0 else None,
+        status=status if fill.filled_size > 0 else "NO_FILL",
+        is_paper=True,
+        prediction_id=prediction_id,
+        created_at=now,
+    )
     if fill.filled_size <= 0:
-        return Trade(
-            condition_id=candidate.condition_id,
-            token_id=candidate.yes_token,
-            side="BUY",
-            size=0.0,
-            limit_price=limit_price,
-            fill_price=None,
-            slippage=None,
-            intended_size=shares,
-            is_paper=True,
-            prediction_id=prediction_id,
-            opened_at=now,
-            closed_at=now,
-            pnl=0.0,
-            outcome="no_fill",
-        )
-    return Trade(
+        return _PaperExecutionPlan(execution=execution)
+    trade = Trade(
         condition_id=candidate.condition_id,
         token_id=candidate.yes_token,
         side="BUY",
@@ -384,6 +411,7 @@ async def _paper_execute_if_allowed(
         is_paper=True,
         prediction_id=prediction_id,
     )
+    return _PaperExecutionPlan(execution=execution, trade=trade)
 
 
 async def _settle_expired_trades(
@@ -393,17 +421,17 @@ async def _settle_expired_trades(
     failure_log_path: Path | None = None,
 ) -> int:
     """Close paper trades whose markets have resolved; run postmortem on each."""
-    log_path = failure_log_path or _FAILURE_LOG_PATH
+    log_path = failure_log_path or FAILURE_LOG_PATH
     open_trades = await fetch_open_trades(conn)
     now = int(time.time())
     settled = 0
 
     for record in open_trades:
-        if not _is_expired(record.end_date_iso, now):
+        if record.end_date_iso and not _is_expired(record.end_date_iso, now):
             continue
 
         try:
-            resolution = await client.get_market_resolution(record.condition_id)
+            resolution = await _get_market_resolution(client, record.condition_id)
         except Exception as exc:
             log.warning("resolution check failed for %s: %s", record.condition_id, exc)
             continue
@@ -444,6 +472,35 @@ async def _settle_expired_trades(
         settled += 1
 
     return settled
+
+
+async def _get_market_resolution(client: Any, condition_id: str) -> MarketResolution:
+    resolver = getattr(client, "get_market_resolution", None)
+    if callable(resolver):
+        return await resolver(condition_id)
+
+    markets = await client.list_markets(limit=100, active_only=False)
+    for market in markets:
+        if market.condition_id == condition_id:
+            return _resolution_from_market_raw(market.raw)
+    return MarketResolution(resolved=False, final_yes_price=None)
+
+
+def _resolution_from_market_raw(raw: dict[str, Any]) -> MarketResolution:
+    raw_prices = raw.get("outcomePrices")
+    if not raw_prices:
+        return MarketResolution(resolved=False, final_yes_price=None)
+    try:
+        prices = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+        yes_price = float(prices[0])
+        no_price = float(prices[1])
+    except (ValueError, TypeError, IndexError):
+        return MarketResolution(resolved=False, final_yes_price=None)
+    if yes_price >= 0.95 and no_price < 0.05:
+        return MarketResolution(resolved=True, final_yes_price=yes_price)
+    if no_price >= 0.95 and yes_price < 0.05:
+        return MarketResolution(resolved=True, final_yes_price=yes_price)
+    return MarketResolution(resolved=False, final_yes_price=None)
 
 
 def _is_expired(end_date_iso: str | None, now: int) -> bool:

@@ -68,6 +68,30 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(closed_at) WHERE closed_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS paper_executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_id INTEGER,
+    trade_id INTEGER,
+    condition_id TEXT NOT NULL,
+    token_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    requested_size REAL NOT NULL,
+    filled_size REAL NOT NULL,
+    unfilled_size REAL NOT NULL,
+    limit_price REAL NOT NULL,
+    fill_price REAL,
+    slippage REAL,
+    status TEXT NOT NULL,
+    is_paper INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (prediction_id) REFERENCES predictions(id),
+    FOREIGN KEY (trade_id) REFERENCES trades(id)
+);
+CREATE INDEX IF NOT EXISTS idx_paper_executions_prediction
+    ON paper_executions(prediction_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_executions_status
+    ON paper_executions(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id INTEGER NOT NULL,

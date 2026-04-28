@@ -13,6 +13,7 @@ from .models import (
     FlaggedMarket,
     Lesson,
     OpenTradeRecord,
+    PaperExecution,
     Prediction,
     ResearchBrief,
     Trade,
@@ -94,6 +95,34 @@ async def insert_trade(conn: aiosqlite.Connection, t: Trade) -> int:
     )
     await conn.commit()
     t.id = cur.lastrowid
+    return cur.lastrowid
+
+
+async def insert_paper_execution(conn: aiosqlite.Connection, e: PaperExecution) -> int:
+    cur = await conn.execute(
+        "INSERT INTO paper_executions "
+        "(prediction_id, trade_id, condition_id, token_id, side, requested_size, filled_size, "
+        " unfilled_size, limit_price, fill_price, slippage, status, is_paper, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            e.prediction_id,
+            e.trade_id,
+            e.condition_id,
+            e.token_id,
+            e.side,
+            e.requested_size,
+            e.filled_size,
+            e.unfilled_size,
+            e.limit_price,
+            e.fill_price,
+            e.slippage,
+            e.status,
+            int(e.is_paper),
+            e.created_at,
+        ),
+    )
+    await conn.commit()
+    e.id = cur.lastrowid
     return cur.lastrowid
 
 

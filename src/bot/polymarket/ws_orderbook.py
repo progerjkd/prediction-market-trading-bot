@@ -7,6 +7,7 @@ exponential backoff. No authentication required for the public 'market' channel.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -41,6 +42,14 @@ class OrderBookCache:
     def stop(self) -> None:
         self._stop.set()
 
+    def set(self, snap: OrderBookSnapshot) -> None:
+        self._cache[snap.token_id] = snap
+        if snap.mid is not None:
+            hist = self._price_history.setdefault(snap.token_id, [])
+            hist.append((snap.timestamp, snap.mid))
+            cutoff = snap.timestamp - self._HISTORY_TTL
+            self._price_history[snap.token_id] = [(t, m) for t, m in hist if t >= cutoff]
+
     def update(self, event: dict[str, Any]) -> None:
         if event.get("event_type") != "book":
             return
@@ -63,12 +72,7 @@ class OrderBookCache:
             return
         ts = int(event.get("timestamp") or 0) or int(time.time())
         snap = OrderBookSnapshot(token_id=token_id, bids=bids, asks=asks, timestamp=ts)
-        self._cache[token_id] = snap
-        if snap.mid is not None:
-            hist = self._price_history.setdefault(token_id, [])
-            hist.append((ts, snap.mid))
-            cutoff = ts - self._HISTORY_TTL
-            self._price_history[token_id] = [(t, m) for t, m in hist if t >= cutoff]
+        self.set(snap)
 
     def get(self, token_id: str) -> OrderBookSnapshot | None:
         return self._cache.get(token_id)
@@ -108,11 +112,15 @@ class OrderBookSubscriber:
         out_queue: asyncio.Queue[dict[str, Any]],
         url: str | None = None,
         max_backoff: float = 60.0,
+        heartbeat_interval: float = 10.0,
+        custom_feature_enabled: bool = True,
     ):
         self.token_ids = list(token_ids)
         self.queue = out_queue
         self.url = url or os.environ.get("WS_HOST", DEFAULT_WS)
         self.max_backoff = max_backoff
+        self.heartbeat_interval = heartbeat_interval
+        self.custom_feature_enabled = custom_feature_enabled
         self._stop = asyncio.Event()
         self._reconnect = asyncio.Event()
 
@@ -137,33 +145,141 @@ class OrderBookSubscriber:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self.max_backoff)
 
+    async def _heartbeat(self, ws: Any) -> None:
+        while not self._stop.is_set():
+            await asyncio.sleep(self.heartbeat_interval)
+            if self._stop.is_set():
+                return
+            await ws.send("PING")
+
     async def _connect_and_stream(self) -> None:
         async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
             sub = {
                 "type": "market",
                 "assets_ids": self.token_ids,
-                "custom_feature_enabled": True,
+                "custom_feature_enabled": self.custom_feature_enabled,
             }
             await ws.send(json.dumps(sub))
             log.info("ws subscribed to %d tokens", len(self.token_ids))
 
-            while not self._stop.is_set():
-                if self._reconnect.is_set():
-                    self._reconnect.clear()
-                    log.info("ws reconnecting with %d updated tokens", len(self.token_ids))
-                    return  # exit cleanly; run() will reconnect immediately
-                try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                except TimeoutError:
-                    continue
-                if isinstance(msg, bytes):
-                    msg = msg.decode("utf-8", errors="replace")
-                try:
-                    payload = json.loads(msg)
-                except ValueError:
-                    log.debug("non-json ws msg ignored: %r", msg[:120])
-                    continue
-                # CLOB sends a list of events
-                events = payload if isinstance(payload, list) else [payload]
-                for event in events:
-                    await self.queue.put(event)
+            heartbeat = asyncio.create_task(self._heartbeat(ws))
+            try:
+                while not self._stop.is_set():
+                    if self._reconnect.is_set():
+                        self._reconnect.clear()
+                        log.info("ws reconnecting with %d updated tokens", len(self.token_ids))
+                        return  # exit cleanly; run() will reconnect immediately
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except TimeoutError:
+                        continue
+                    if isinstance(msg, bytes):
+                        msg = msg.decode("utf-8", errors="replace")
+                    if msg == "PONG":
+                        continue
+                    try:
+                        payload = json.loads(msg)
+                    except ValueError:
+                        log.debug("non-json ws msg ignored: %r", msg[:120])
+                        continue
+                    # CLOB sends a list of events
+                    events = payload if isinstance(payload, list) else [payload]
+                    for event in events:
+                        await self.queue.put(event)
+            finally:
+                heartbeat.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat
+
+
+class WebSocketOrderBookClient:
+    """Read-through orderbook client backed by a WebSocket event cache."""
+
+    def __init__(
+        self,
+        fallback_client: Any,
+        queue: asyncio.Queue[dict[str, Any]],
+        *,
+        url: str | None = None,
+        enabled: bool = True,
+        subscriber_factory: Any = OrderBookSubscriber,
+        cache: OrderBookCache | None = None,
+    ) -> None:
+        self._fallback = fallback_client
+        self._queue = queue
+        self._url = url
+        self._enabled = enabled
+        self._subscriber_factory = subscriber_factory
+        self._cache = cache or OrderBookCache()
+        self._subscriber: Any | None = None
+        self._subscriber_task: asyncio.Task | None = None
+        self._subscribed_tokens: tuple[str, ...] = ()
+
+    async def list_markets(
+        self,
+        limit: int = 100,
+        active_only: bool = True,
+        max_pages: int = 5,
+    ) -> list[Any]:
+        self._drain_queue()
+        markets = await self._fallback.list_markets(
+            limit=limit,
+            active_only=active_only,
+            max_pages=max_pages,
+        )
+        tokens = [m.yes_token for m in markets[:limit] if not getattr(m, "closed", False)]
+        await self._ensure_subscription(tokens)
+        return markets
+
+    async def get_orderbook(self, token_id: str) -> OrderBookSnapshot:
+        self._drain_queue()
+        cached = self._cache.get(token_id)
+        if cached is not None:
+            return cached
+        book = await self._fallback.get_orderbook(token_id)
+        self._cache.set(book)
+        return book
+
+    async def close(self) -> None:
+        await self._stop_subscriber()
+        close = getattr(self._fallback, "close", None)
+        if close is not None:
+            await close()
+
+    def _drain_queue(self) -> None:
+        while True:
+            try:
+                event = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            self._cache.update(event)
+            self._queue.task_done()
+
+    async def _ensure_subscription(self, token_ids: list[str]) -> None:
+        if not self._enabled:
+            return
+        tokens = tuple(dict.fromkeys(token_ids))
+        if tokens == self._subscribed_tokens:
+            return
+        await self._stop_subscriber()
+        if not tokens:
+            self._subscribed_tokens = ()
+            return
+        self._subscriber = self._subscriber_factory(
+            list(tokens),
+            self._queue,
+            url=self._url,
+            custom_feature_enabled=False,
+        )
+        self._subscriber_task = asyncio.create_task(self._subscriber.run())
+        self._subscribed_tokens = tokens
+
+    async def _stop_subscriber(self) -> None:
+        if self._subscriber is not None:
+            self._subscriber.stop()
+        if self._subscriber_task is not None:
+            self._subscriber_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._subscriber_task
+        self._subscriber = None
+        self._subscriber_task = None

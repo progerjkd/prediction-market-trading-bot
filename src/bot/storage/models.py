@@ -80,6 +80,25 @@ class Trade:
 
 
 @dataclass
+class PaperExecution:
+    condition_id: str
+    token_id: str
+    side: str  # "BUY" | "SELL"
+    requested_size: float
+    filled_size: float
+    unfilled_size: float
+    limit_price: float
+    status: str  # "FULL_FILL" | "PARTIAL_FILL" | "NO_FILL"
+    is_paper: bool = True
+    prediction_id: int | None = None
+    trade_id: int | None = None
+    fill_price: float | None = None
+    slippage: float | None = None
+    created_at: int = field(default_factory=lambda: int(time.time()))
+    id: int | None = None
+
+
+@dataclass
 class Lesson:
     trade_id: int
     cause: str  # bad-prediction | bad-timing | bad-execution | external-shock

@@ -95,6 +95,14 @@ async def _run(conn, book: OrderBookSnapshot, tmp_path=None, scan_book: OrderBoo
     return summary, rows
 
 
+async def _paper_execution_rows(conn):
+    cur = await conn.execute(
+        "SELECT status, filled_size, unfilled_size, trade_id, requested_size "
+        "FROM paper_executions ORDER BY id"
+    )
+    return await cur.fetchall()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -112,35 +120,46 @@ async def db(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-async def test_no_fill_trade_is_persisted(db, tmp_path):
-    summary, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert len(rows) == 1, "no-fill should be persisted as a trade record"
-
-
-async def test_no_fill_trade_has_zero_size(db, tmp_path):
+async def test_no_fill_execution_is_persisted_without_trade(db, tmp_path):
     _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert rows[0][0] == pytest.approx(0.0)  # size
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert len(executions) == 1
 
 
-async def test_no_fill_trade_outcome_is_no_fill(db, tmp_path):
+async def test_no_fill_execution_has_zero_filled_size(db, tmp_path):
     _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert rows[0][3] == "no_fill"  # outcome
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert executions[0][1] == pytest.approx(0.0)
 
 
-async def test_no_fill_trade_is_immediately_closed(db, tmp_path):
+async def test_no_fill_execution_status_is_no_fill(db, tmp_path):
     _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert rows[0][4] is not None  # closed_at is set
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert executions[0][0] == "NO_FILL"
 
 
-async def test_no_fill_trade_has_zero_pnl(db, tmp_path):
+async def test_no_fill_execution_has_no_trade_id(db, tmp_path):
     _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert rows[0][5] == pytest.approx(0.0)  # pnl
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert executions[0][3] is None
 
 
-async def test_no_fill_trade_records_intended_size(db, tmp_path):
+async def test_no_fill_execution_records_unfilled_size(db, tmp_path):
     _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
-    assert rows[0][2] is not None  # intended_size populated
-    assert rows[0][2] > 0
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert executions[0][2] > 0
+
+
+async def test_no_fill_execution_records_requested_size(db, tmp_path):
+    _, rows = await _run(db, _empty_book(), tmp_path, scan_book=_full_book())
+    executions = await _paper_execution_rows(db)
+    assert rows == []
+    assert executions[0][4] > 0
 
 
 async def test_no_fill_does_not_count_as_paper_trade_written(db, tmp_path):
