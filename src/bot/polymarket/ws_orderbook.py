@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -30,8 +31,11 @@ class OrderBookCache:
     Thread-local — designed for a single asyncio task.
     """
 
+    _HISTORY_TTL = 90_000  # 25 hours in seconds
+
     def __init__(self) -> None:
         self._cache: dict[str, OrderBookSnapshot] = {}
+        self._price_history: dict[str, list[tuple[int, float]]] = {}
         self._stop = asyncio.Event()
 
     def stop(self) -> None:
@@ -57,15 +61,29 @@ class OrderBookCache:
         except (KeyError, ValueError, TypeError):
             log.debug("malformed book event for %s, skipping", token_id)
             return
-        self._cache[token_id] = OrderBookSnapshot(
-            token_id=token_id,
-            bids=bids,
-            asks=asks,
-            timestamp=int(event.get("timestamp") or 0),
-        )
+        ts = int(event.get("timestamp") or 0) or int(time.time())
+        snap = OrderBookSnapshot(token_id=token_id, bids=bids, asks=asks, timestamp=ts)
+        self._cache[token_id] = snap
+        if snap.mid is not None:
+            hist = self._price_history.setdefault(token_id, [])
+            hist.append((ts, snap.mid))
+            cutoff = ts - self._HISTORY_TTL
+            self._price_history[token_id] = [(t, m) for t, m in hist if t >= cutoff]
 
     def get(self, token_id: str) -> OrderBookSnapshot | None:
         return self._cache.get(token_id)
+
+    def momentum(self, token_id: str, lookback_seconds: int) -> float:
+        """Return (current_mid - past_mid) / past_mid, or 0.0 if history insufficient."""
+        hist = self._price_history.get(token_id, [])
+        if len(hist) < 2:
+            return 0.0
+        current_ts, current_mid = hist[-1]
+        target_ts = current_ts - lookback_seconds
+        past_mid = next((m for t, m in reversed(hist) if t <= target_ts), None)
+        if past_mid is None or past_mid == 0.0:
+            return 0.0
+        return (current_mid - past_mid) / past_mid
 
     async def run(self, queue: asyncio.Queue) -> None:
         """Consume events from queue until stop() is called."""

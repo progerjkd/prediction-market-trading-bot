@@ -196,6 +196,8 @@ async def _candidates_from_markets(
         if book.mid is None or book.spread is None:
             log.debug("skipping %s: orderbook has no mid/spread", market.condition_id)
             continue
+        momentum_1h = book_cache.momentum(market.yes_token, 3600) if book_cache else 0.0
+        momentum_24h = book_cache.momentum(market.yes_token, 86400) if book_cache else 0.0
         candidates.append(
             MarketCandidate(
                 condition_id=market.condition_id,
@@ -208,6 +210,8 @@ async def _candidates_from_markets(
                 liquidity=market.liquidity,
                 end_date_iso=market.end_date_iso,
                 raw=market.raw,
+                momentum_1h=momentum_1h,
+                momentum_24h=momentum_24h,
             )
         )
     return candidates
@@ -247,8 +251,8 @@ async def _predict(
                 "volume_24h": candidate.volume_24h,
                 "days_to_resolution": _market_days_remaining(candidate.end_date_iso),
                 "narrative_score": 0.0,
-                "momentum_1h": 0.0,
-                "momentum_24h": 0.0,
+                "momentum_1h": candidate.momentum_1h,
+                "momentum_24h": candidate.momentum_24h,
             },
             model_path=settings.xgboost_model_path,
         )

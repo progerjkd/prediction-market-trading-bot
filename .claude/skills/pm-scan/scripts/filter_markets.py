@@ -20,6 +20,8 @@ class MarketCandidate:
     end_date_iso: str | None
     raw: dict[str, Any] = field(default_factory=dict)
     edge_proxy: float = 0.0
+    momentum_1h: float = 0.0
+    momentum_24h: float = 0.0
 
 
 def filter_tradeable_markets(
