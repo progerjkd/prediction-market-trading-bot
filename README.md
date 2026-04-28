@@ -2,7 +2,7 @@
 
 # Polymarket Trading Bot — Claude Skills MVP
 
-AI-powered prediction market trading bot for Polymarket. Five-stage Claude-Skills pipeline orchestrated by an asyncio daemon. **Paper trading only** in v1 — going live is a one-flag flip.
+AI-powered prediction market trading bot for Polymarket. Five-stage Claude-Skills pipeline orchestrated by an asyncio daemon. **Paper trading only** in v1; live trading remains intentionally unreachable in code.
 
 ## Pipeline
 
@@ -22,7 +22,8 @@ cp .env.example .env  # fill in keys
 pytest                # run unit tests
 python -m bot.daemon --once --paper --mock-ai --max-markets 1  # local smoke test
 python -m bot.daemon --once --paper --scan-only --max-markets 10  # live-data scan
-python -m bot.daemon                 # always-on paper trading
+python -m bot.daemon --paper         # always-on paper trading
+scripts/paper-daemon start           # tmux paper-run harness
 ```
 
 ## Layout
@@ -35,12 +36,13 @@ python -m bot.daemon                 # always-on paper trading
 ## Kill switch
 
 ```bash
-touch data/STOP
+scripts/paper-daemon stop
 ```
 
 Daemon halts new signals within 60s.
 
+See `docs/RUNBOOK.md` for tmux startup, monitoring, logs, status checks, and shutdown.
+
 ## Going live
 
-Set `LIVE_TRADING=true` only after ≥50 paper trades show win rate > 60% and Brier < 0.25.
-The v1 code still forces paper mode even if the environment flag is set.
+Do not enable live trading in v1. `RuntimeSettings.live_trading_enabled` forces `False` even if `LIVE_TRADING=true` is present.
