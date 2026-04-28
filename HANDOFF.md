@@ -26,6 +26,7 @@
 - `740b11e` - `feat: WS reconnect on token update + lint cleanup`
 - `48d3c85` - `fix: wire TRAINING_DATA_PATH env override into load_settings()`
 - `b14f5af` - merge `origin/main` into `feature/resume-mvp`; reconcile partial-fill, postmortem, and WS runtime APIs
+- `194fbe8` - `docs: add paper daemon runbook and tmux harness`
 
 ## Current State
 
@@ -35,6 +36,8 @@
 - Full test suite passes: `303 passed` with `.venv/bin/pytest`.
 - Non-integration suite passes: `302 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Ruff passes: `All checks passed`.
+- Paper-run tmux harness is available at `scripts/paper-daemon`; runbook is `docs/RUNBOOK.md`.
+- `scripts/paper-daemon status` works and forces `LIVE_TRADING=false` before invoking daemon status.
 - Local paper-mode smoke command works:
 
 ```bash
@@ -67,6 +70,7 @@ Observed output (2026-04-27):
 - Multi-AI workflow guide: `docs/AI_COLLABORATION.md`
 - V1 scope remains Polymarket-only, Python, XGBoost + Claude hybrid, always-on daemon, paper trading only.
 - Live trading is intentionally forced disabled in `RuntimeSettings.live_trading_enabled`, even if `LIVE_TRADING=true`.
+- The local runtime DB currently reports the acceptance gate as met, likely because prior backtest/paper data populated `metrics_daily`; v1 still must remain paper-only.
 - Polymarket dependency was updated to `py-clob-client-v2>=1.0.0` for the CLOB V2 migration.
 - `.claude/settings*.json`, the PDF, `.venv`, runtime DB, cache folders, and generated data are ignored.
 
@@ -206,12 +210,21 @@ Observed output (2026-04-27):
 - `_candidates_from_markets` populates momentum from cache; `_predict` passes real values to XGBoost.
 - 10 tests in `tests/test_momentum.py`.
 
+### Paper daemon runbook + tmux harness (194fbe8)
+
+- `scripts/paper-daemon` manages a tmux session named `pm-bot` by default.
+- `start` opens three panes: daemon, log tail, and periodically refreshed `--status`.
+- `stop` creates the STOP file for graceful daemon shutdown; `close` kills the tmux panes after shutdown; `clear-stop` removes the STOP file before the next run.
+- The helper forces `LIVE_TRADING=false` and always passes `--paper`.
+- `docs/RUNBOOK.md` documents startup, monitoring, logs, shutdown, status checks, and safety rules.
+- `README.md` now points paper operation at the runbook and removes the old "one-flag flip" live-trading wording.
+
 ## Next Highest-Value Work
 
-1. **Accumulate paper trades** — run the daemon continuously until 50+ paper trades settle so `acceptance_criteria_met()` can be evaluated against real data.
-2. **Operational paper-run harness** — add a documented tmux/systemd-style runbook or script for starting/stopping the paper daemon, checking status, and tailing logs without touching live trading.
-3. **Feature retraining after paper run** — once 50+ paper trades have settled, run `--check-retrain` to incorporate fresh signal distributions from actual market behavior.
-4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
+1. **Run supervised paper daemon** — start with `scripts/paper-daemon start`, monitor with `scripts/paper-daemon status` and logs, and let it accumulate paper executions.
+2. **Separate backtest metrics from live paper-run metrics** — the local DB can report acceptance gate as met from historical/backtest data; add a provenance field or separate DB/run mode before treating status as operational evidence.
+3. **Feature retraining after paper run** — once fresh paper data is clearly separated and enough trades have settled, run `--check-retrain` to incorporate actual market behavior.
+4. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
 
