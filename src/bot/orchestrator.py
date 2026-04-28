@@ -24,6 +24,7 @@ from bot.storage.models import (
     PaperExecution,
     Prediction,
     ResearchBrief,
+    SkipEvent,
     Trade,
 )
 from bot.storage.repo import (
@@ -43,6 +44,7 @@ from bot.storage.repo import (
     insert_paper_execution,
     insert_prediction,
     insert_research_brief,
+    insert_skip_event,
     insert_trade,
     net_realized_pnl,
     open_condition_ids,
@@ -142,6 +144,16 @@ async def run_once(
             max_spread=settings.scan_max_spread,
             min_liquidity=settings.scan_min_liquidity,
         )
+        flagged_ids = {c.condition_id for c in flagged}
+        for candidate in candidates:
+            if candidate.condition_id not in flagged_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="scan_filter",
+                    reason=_scan_filter_reason(candidate, settings),
+                    detail=_candidate_detail(candidate),
+                )
 
         for candidate in flagged:
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
@@ -169,9 +181,22 @@ async def run_once(
             cooled_ids = await bad_exit_condition_ids(conn, cooldown_since)
         for candidate in flagged:
             if candidate.condition_id in held_condition_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="position_gate",
+                    reason="already_open_position",
+                )
                 skipped += 1
                 continue
             if candidate.condition_id in cooled_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="cooldown",
+                    reason="market_cooldown",
+                    detail={"cooldown_hours": settings.market_cooldown_hours},
+                )
                 skipped += 1
                 continue
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
@@ -208,10 +233,33 @@ async def run_once(
             )
 
             if not decision.should_trade:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="decision",
+                    reason="decision_should_trade_false",
+                    detail={
+                        "p_model": decision.p_model,
+                        "p_market": decision.p_market,
+                        "edge": decision.edge,
+                        "edge_threshold": settings.edge_threshold,
+                    },
+                )
                 skipped += 1
                 continue
 
             if not (settings.min_model_prob <= decision.p_model <= settings.max_model_prob):
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="confidence_gate",
+                    reason="model_probability_out_of_bounds",
+                    detail={
+                        "p_model": decision.p_model,
+                        "min_model_prob": settings.min_model_prob,
+                        "max_model_prob": settings.max_model_prob,
+                    },
+                )
                 skipped += 1
                 continue
 
@@ -225,9 +273,27 @@ async def run_once(
                 p_market=decision.p_market,
             )
             if execution_plan is None:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="risk_or_sizing",
+                    reason="risk_or_sizing_rejected",
+                    detail={"p_model": decision.p_model, "p_market": decision.p_market},
+                )
                 skipped += 1
             elif execution_plan.trade is None:
                 await insert_paper_execution(conn, execution_plan.execution)
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="execution",
+                    reason="no_fill",
+                    detail={
+                        "requested_size": execution_plan.execution.requested_size,
+                        "unfilled_size": execution_plan.execution.unfilled_size,
+                        "limit_price": execution_plan.execution.limit_price,
+                    },
+                )
                 no_fill_trades += 1
                 skipped += 1
             else:
@@ -688,6 +754,48 @@ def _to_paper_orderbook(book: OrderBookSnapshot) -> OrderBook:
         asks=[OrderBookLevel(price=price, size=size) for price, size in book.asks],
         bids=[OrderBookLevel(price=price, size=size) for price, size in book.bids],
     )
+
+
+async def _record_skip(
+    conn: aiosqlite.Connection,
+    *,
+    candidate: MarketCandidate,
+    stage: str,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await insert_skip_event(
+        conn,
+        SkipEvent(
+            condition_id=candidate.condition_id,
+            token_id=candidate.yes_token,
+            stage=stage,
+            reason=reason,
+            detail=detail or {},
+        ),
+    )
+
+
+def _candidate_detail(candidate: MarketCandidate) -> dict[str, float | str | None]:
+    return {
+        "volume_24h": candidate.volume_24h,
+        "liquidity": candidate.liquidity,
+        "spread": candidate.spread,
+        "days_to_resolution": _market_days_remaining(candidate.end_date_iso),
+    }
+
+
+def _scan_filter_reason(candidate: MarketCandidate, settings: RuntimeSettings) -> str:
+    days = _market_days_remaining(candidate.end_date_iso)
+    if candidate.volume_24h < settings.scan_min_volume:
+        return "low_volume"
+    if days > settings.scan_max_days:
+        return "too_far_to_resolution"
+    if candidate.spread > settings.scan_max_spread:
+        return "wide_spread"
+    if candidate.liquidity < settings.scan_min_liquidity:
+        return "low_liquidity"
+    return "scan_filter_rejected"
 
 
 def summary_to_json(summary: RunSummary) -> str:

@@ -1,6 +1,7 @@
 """Repository layer — typed CRUD for persisted records."""
 from __future__ import annotations
 
+import json
 import time
 from datetime import date, datetime
 
@@ -16,6 +17,7 @@ from .models import (
     PaperExecution,
     Prediction,
     ResearchBrief,
+    SkipEvent,
     Trade,
 )
 
@@ -144,6 +146,79 @@ async def insert_paper_execution(conn: aiosqlite.Connection, e: PaperExecution) 
     await conn.commit()
     e.id = cur.lastrowid
     return cur.lastrowid
+
+
+async def insert_skip_event(conn: aiosqlite.Connection, event: SkipEvent) -> int:
+    cur = await conn.execute(
+        "INSERT INTO skip_events "
+        "(condition_id, token_id, stage, reason, detail_json, source, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            event.condition_id,
+            event.token_id,
+            event.stage,
+            event.reason,
+            event.detail_json(),
+            event.source,
+            event.created_at,
+        ),
+    )
+    await conn.commit()
+    event.id = cur.lastrowid
+    return cur.lastrowid
+
+
+async def recent_skip_events(
+    conn: aiosqlite.Connection,
+    *,
+    limit: int = 20,
+    source: str = "paper_live",
+) -> list[SkipEvent]:
+    cur = await conn.execute(
+        """
+        SELECT condition_id, token_id, stage, reason, detail_json, source, created_at, id
+        FROM skip_events
+        WHERE source = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (source, limit),
+    )
+    rows = await cur.fetchall()
+    return [
+        SkipEvent(
+            condition_id=r[0],
+            token_id=r[1],
+            stage=r[2],
+            reason=r[3],
+            detail=json.loads(r[4] or "{}"),
+            source=r[5],
+            created_at=r[6],
+            id=r[7],
+        )
+        for r in rows
+    ]
+
+
+async def skip_reason_counts(
+    conn: aiosqlite.Connection,
+    *,
+    since_seconds_ago: int = 86_400,
+    source: str = "paper_live",
+) -> dict[str, int]:
+    cutoff = int(time.time()) - since_seconds_ago
+    cur = await conn.execute(
+        """
+        SELECT reason, COUNT(*)
+        FROM skip_events
+        WHERE source = ? AND created_at >= ?
+        GROUP BY reason
+        ORDER BY COUNT(*) DESC, reason ASC
+        """,
+        (source, cutoff),
+    )
+    rows = await cur.fetchall()
+    return {str(reason): int(count) for reason, count in rows}
 
 
 async def close_trade(

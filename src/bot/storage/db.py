@@ -95,6 +95,19 @@ CREATE INDEX IF NOT EXISTS idx_paper_executions_prediction
 CREATE INDEX IF NOT EXISTS idx_paper_executions_status
     ON paper_executions(status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS skip_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id TEXT,
+    token_id TEXT,
+    stage TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    source TEXT NOT NULL DEFAULT 'paper_live',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skip_events_created ON skip_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_skip_events_reason ON skip_events(reason, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id INTEGER NOT NULL,

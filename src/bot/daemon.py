@@ -26,6 +26,7 @@ from bot.storage.repo import (  # noqa: E402
     acceptance_criteria_met,
     persist_daily_metrics,
     recent_daily_metrics,
+    skip_reason_counts,
 )
 
 log = logging.getLogger(__name__)
@@ -212,6 +213,15 @@ async def _print_status(conn) -> None:
         print("=== Paper-live acceptance gate: MET — paper trading criteria satisfied ===")
     else:
         print(f"=== Paper-live acceptance gate: NOT MET — {reason} ===")
+
+    skip_counts = await skip_reason_counts(conn, since_seconds_ago=86_400)
+    print()
+    print("=== Recent skip diagnostics (last 24h) ===")
+    if not skip_counts:
+        print("  (no skip events)")
+    else:
+        for reason, count in skip_counts.items():
+            print(f"  {reason:<32} {count:>6}")
 
 
 async def async_main(argv: list[str] | None = None) -> int:

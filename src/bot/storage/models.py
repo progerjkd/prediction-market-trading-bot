@@ -100,6 +100,21 @@ class PaperExecution:
 
 
 @dataclass
+class SkipEvent:
+    stage: str
+    reason: str
+    condition_id: str | None = None
+    token_id: str | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+    source: str = "paper_live"
+    created_at: int = field(default_factory=lambda: int(time.time()))
+    id: int | None = None
+
+    def detail_json(self) -> str:
+        return json.dumps(self.detail)
+
+
+@dataclass
 class Lesson:
     trade_id: int
     cause: str  # bad-prediction | bad-timing | bad-execution | external-shock
