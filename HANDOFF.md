@@ -23,13 +23,15 @@
 - `79b5266` - `feat: --status dashboard with acceptance gate and recent metrics`
 - `a0365b1` - `fix: use local midnight for metrics day boundaries`
 - `10b2bba` - `feat: live momentum signals from WS price history`
+- `740b11e` - `feat: WS reconnect on token update + lint cleanup`
+- `48d3c85` - `fix: wire TRAINING_DATA_PATH env override into load_settings()`
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `255 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Deterministic tests pass: `261 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
@@ -163,9 +165,16 @@ Observed output (2026-04-26):
 ### WS token subscription update (01770cb)
 
 - `RunSummary.flagged_yes_tokens` field (list, default `[]`). Both return paths in `run_once()` populate it.
-- `OrderBookSubscriber.update_tokens(token_ids)` replaces the subscribed token list (deduped). Takes effect on next reconnect.
+- `OrderBookSubscriber.update_tokens(token_ids)` replaces the subscribed token list (deduped). Triggers immediate reconnect if list changed.
 - `daemon._run_repeating` calls `subscriber.update_tokens(summary.flagged_yes_tokens)` after each pass.
 - 7 tests in `tests/test_ws_token_update.py`.
+
+### WS reconnect on token update (740b11e)
+
+- `OrderBookSubscriber._reconnect: asyncio.Event` — set by `update_tokens()` when token set differs.
+- `_connect_and_stream()` checks the flag on each 1s recv loop; clears it and returns cleanly, causing `run()` to reconnect immediately (no backoff sleep).
+- `run()` resets backoff to 1.0 on clean exit, so reconnect after token update is instant.
+- 6 tests in `tests/test_ws_reconnect.py`.
 
 ### Narrative score from Claude reasoning (3c93b8b)
 
@@ -198,7 +207,7 @@ Observed output (2026-04-26):
 
 ## Next Highest-Value Work
 
-1. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline (WS subscription, momentum, narrative score) works end-to-end.
+1. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline (WS subscription, momentum, narrative score, API spend) works end-to-end.
 2. **Accumulate paper trades** — run the daemon continuously until 50+ paper trades settle so `acceptance_criteria_met()` can be evaluated against real data.
 3. **Feature retraining after paper run** — once 50+ paper trades have settled, run `--check-retrain` to incorporate fresh signal distributions from actual market behavior.
 4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
