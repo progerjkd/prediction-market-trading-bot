@@ -195,7 +195,7 @@ def run_retrain_pipeline(settings) -> dict:
 
 async def _print_status(conn) -> None:
     rows = await recent_daily_metrics(conn, days=7)
-    print("=== Recent daily metrics (last 7 days) ===")
+    print("=== Recent paper-live daily metrics (last 7 days) ===")
     if not rows:
         print("  (no data yet)")
     else:
@@ -209,9 +209,9 @@ async def _print_status(conn) -> None:
     met, reason = await acceptance_criteria_met(conn)
     print()
     if met:
-        print("=== Acceptance gate: MET — paper trading criteria satisfied ===")
+        print("=== Paper-live acceptance gate: MET — paper trading criteria satisfied ===")
     else:
-        print(f"=== Acceptance gate: NOT MET — {reason} ===")
+        print(f"=== Paper-live acceptance gate: NOT MET — {reason} ===")
 
 
 async def async_main(argv: list[str] | None = None) -> int:
@@ -262,7 +262,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                 f"win_rate={result['win_rate']:.1%}, "
                 f"{result['rows_skipped']} rows skipped"
             )
-            await persist_daily_metrics(conn, date.today().isoformat())
+            await persist_daily_metrics(conn, date.today().isoformat(), source="backtest")
             await _print_status(conn)
             return 0
 

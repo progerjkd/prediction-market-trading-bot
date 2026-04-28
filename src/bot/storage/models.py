@@ -76,6 +76,7 @@ class Trade:
     closed_at: int | None = None
     pnl: float | None = None
     outcome: str | None = None
+    source: str = "paper_live"
     id: int | None = None
 
 

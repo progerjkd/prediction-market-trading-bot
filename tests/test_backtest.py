@@ -211,7 +211,24 @@ async def test_backtest_win_rate_reflects_outcomes(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-async def test_backtest_acceptance_gate_passes_with_sufficient_trades(tmp_path):
+async def test_backtest_writes_backtest_source_for_trades(tmp_path):
+    from unittest.mock import patch
+
+    from backtest import run_backtest
+
+    df = _make_df([{"current_mid": 0.35, "label": 1}])
+    conn = await open_db(tmp_path / "bt.sqlite")
+
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+        await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
+
+    cur = await conn.execute("SELECT source FROM trades LIMIT 1")
+    row = await cur.fetchone()
+    assert row[0] == "backtest"
+    await conn.close()
+
+
+async def test_backtest_acceptance_gate_passes_with_explicit_backtest_source(tmp_path):
     from unittest.mock import patch
 
     from backtest import run_backtest
@@ -225,9 +242,26 @@ async def test_backtest_acceptance_gate_passes_with_sufficient_trades(tmp_path):
         result = await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     assert result["trades_written"] == 70
-    # acceptance_criteria_met checks the DB
-    accepted, reason = await acceptance_criteria_met(conn)
+    accepted, reason = await acceptance_criteria_met(conn, source="backtest")
     assert accepted, f"expected acceptance gate to pass: {reason}"
+    await conn.close()
+
+
+async def test_backtest_rows_do_not_satisfy_default_paper_live_gate(tmp_path):
+    from unittest.mock import patch
+
+    from backtest import run_backtest
+
+    rows = [{"current_mid": 0.35, "label": 1}] * 60 + [{"current_mid": 0.35, "label": 0}] * 10
+    df = _make_df(rows)
+    conn = await open_db(tmp_path / "bt.sqlite")
+
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+        await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
+
+    accepted, reason = await acceptance_criteria_met(conn)
+    assert not accepted
+    assert "have 0" in reason
     await conn.close()
 
 

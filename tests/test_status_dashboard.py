@@ -106,6 +106,17 @@ async def test_status_prints_acceptance_gate(tmp_path, monkeypatch, capsys):
     assert "acceptance" in out.lower() or "gate" in out.lower() or "not met" in out.lower()
 
 
+async def test_status_labels_acceptance_gate_as_paper_live(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+
+    monkeypatch.setenv("BOT_DB_PATH", str(tmp_path / "bot.sqlite"))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+    assert "paper-live acceptance gate" in out.lower()
+
+
 async def test_status_prints_reason_when_not_met(tmp_path, monkeypatch, capsys):
     from bot.daemon import async_main
 

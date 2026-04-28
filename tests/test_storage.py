@@ -1,6 +1,8 @@
 """Smoke tests for storage layer (in-memory SQLite)."""
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from bot.storage.db import open_db
@@ -48,6 +50,79 @@ async def test_schema_creates_tables(db):
     assert "paper_executions" in names
 
 
+async def test_trades_schema_has_source_column(db):
+    cur = await db.execute("PRAGMA table_info(trades)")
+    columns = {row[1] for row in await cur.fetchall()}
+    assert "source" in columns
+
+
+async def test_metrics_daily_schema_has_source_column(db):
+    cur = await db.execute("PRAGMA table_info(metrics_daily)")
+    columns = {row[1] for row in await cur.fetchall()}
+    assert "source" in columns
+
+
+async def test_open_db_migrates_legacy_metrics_and_trades_source_columns(tmp_path):
+    db_path = tmp_path / "legacy.sqlite"
+    raw = sqlite3.connect(db_path)
+    raw.executescript(
+        """
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prediction_id INTEGER,
+            condition_id TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            side TEXT NOT NULL,
+            size REAL NOT NULL,
+            limit_price REAL NOT NULL,
+            fill_price REAL,
+            slippage REAL,
+            intended_size REAL,
+            is_paper INTEGER NOT NULL DEFAULT 1,
+            opened_at INTEGER NOT NULL,
+            closed_at INTEGER,
+            pnl REAL,
+            outcome TEXT
+        );
+        CREATE TABLE metrics_daily (
+            date TEXT PRIMARY KEY,
+            win_rate REAL,
+            sharpe REAL,
+            max_drawdown REAL,
+            profit_factor REAL,
+            brier_score REAL,
+            n_trades INTEGER,
+            pnl_usd REAL,
+            api_cost_usd REAL
+        );
+        INSERT INTO metrics_daily
+            (date, win_rate, sharpe, max_drawdown, profit_factor, brier_score, n_trades, pnl_usd, api_cost_usd)
+        VALUES ('2026-04-27', 0.5, 0, 0, 0, 0.2, 10, 42, 0);
+        INSERT INTO trades
+            (condition_id, token_id, side, size, limit_price, is_paper, opened_at, closed_at, pnl, outcome)
+        VALUES
+            ('bt_0000001', 'bt_tok_0000001', 'BUY', 10, 0.5, 1, 1770000000, 1770000000, 5, 'YES');
+        """
+    )
+    raw.close()
+
+    conn = await open_db(db_path)
+    try:
+        cur = await conn.execute("PRAGMA table_info(trades)")
+        trade_columns = {row[1] for row in await cur.fetchall()}
+        assert "source" in trade_columns
+
+        cur = await conn.execute("SELECT source FROM trades WHERE condition_id='bt_0000001'")
+        row = await cur.fetchone()
+        assert row == ("backtest",)
+
+        cur = await conn.execute("SELECT COUNT(*) FROM metrics_daily WHERE source='paper_live'")
+        row = await cur.fetchone()
+        assert row[0] == 0
+    finally:
+        await conn.close()
+
+
 async def test_insert_and_fetch_flagged_market(db):
     m = FlaggedMarket(
         condition_id="cond1",
@@ -80,6 +155,21 @@ async def test_open_positions_and_exposure(db):
     await insert_trade(db, trade)
     assert await open_positions_count(db) == 1
     assert await total_open_exposure(db) == pytest.approx(100 * 0.55)
+
+
+async def test_insert_trade_defaults_source_to_paper_live(db):
+    trade = Trade(
+        condition_id="c-source",
+        token_id="t-source",
+        side="BUY",
+        size=10,
+        limit_price=0.5,
+    )
+    tid = await insert_trade(db, trade)
+
+    cur = await db.execute("SELECT source FROM trades WHERE id=?", (tid,))
+    row = await cur.fetchone()
+    assert row[0] == "paper_live"
 
 
 async def test_close_trade_clears_open_count(db):

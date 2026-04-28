@@ -30,11 +30,20 @@ def _today() -> str:
     return date.today().isoformat()
 
 
-async def _settled_trade(conn, *, pnl: float, p_model: float, outcome: str) -> int:
+async def _settled_trade(conn, *, pnl: float, p_model: float, outcome: str, source: str = "paper_live") -> int:
     """Insert a prediction + closed trade pair and return trade id."""
     pred = Prediction(condition_id="cx", token_id="tx", p_model=p_model, p_market=0.5, edge=0.1)
     pid = await insert_prediction(conn, pred)
-    t = Trade(condition_id="cx", token_id="tx", side="BUY", size=100, limit_price=0.5, fill_price=0.5, prediction_id=pid)
+    t = Trade(
+        condition_id="cx",
+        token_id="tx",
+        side="BUY",
+        size=100,
+        limit_price=0.5,
+        fill_price=0.5,
+        prediction_id=pid,
+        source=source,
+    )
     tid = await insert_trade(conn, t)
     await close_trade(conn, tid, pnl=pnl, outcome=outcome)
     return tid
@@ -86,6 +95,21 @@ async def test_persist_daily_metrics_n_trades_count(db):
     cur = await db.execute("SELECT n_trades FROM metrics_daily WHERE date=?", (_today(),))
     row = await cur.fetchone()
     assert row[0] == 2
+
+
+async def test_persist_daily_metrics_filters_to_requested_source(db):
+    await _settled_trade(db, pnl=5.0, p_model=0.7, outcome="YES", source="paper_live")
+    await _settled_trade(db, pnl=5.0, p_model=0.7, outcome="YES", source="backtest")
+
+    await persist_daily_metrics(db, _today(), source="paper_live")
+    await persist_daily_metrics(db, _today(), source="backtest")
+
+    cur = await db.execute(
+        "SELECT source, n_trades FROM metrics_daily WHERE date=? ORDER BY source",
+        (_today(),),
+    )
+    rows = await cur.fetchall()
+    assert rows == [("backtest", 1), ("paper_live", 1)]
 
 
 async def test_persist_daily_metrics_excludes_no_fill_trades(db):
@@ -198,6 +222,26 @@ async def test_acceptance_criteria_met_returns_false_with_reason_string(db):
     assert isinstance(reason, str)
     assert not met
     assert len(reason) > 0
+
+
+async def test_acceptance_criteria_default_ignores_backtest_trades(db):
+    for _ in range(60):
+        await _settled_trade(db, pnl=5.0, p_model=0.85, outcome="YES", source="backtest")
+
+    met, reason = await acceptance_criteria_met(db)
+
+    assert met is False
+    assert "have 0" in reason
+
+
+async def test_acceptance_criteria_can_check_backtest_source_explicitly(db):
+    for _ in range(60):
+        await _settled_trade(db, pnl=5.0, p_model=0.85, outcome="YES", source="backtest")
+
+    met, reason = await acceptance_criteria_met(db, source="backtest")
+
+    assert met is True
+    assert reason == ""
 
 
 # ---------------------------------------------------------------------------

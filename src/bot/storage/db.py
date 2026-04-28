@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS trades (
     closed_at INTEGER,
     pnl REAL,
     outcome TEXT,
+    source TEXT NOT NULL DEFAULT 'paper_live',
     FOREIGN KEY (prediction_id) REFERENCES predictions(id)
 );
 CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(closed_at) WHERE closed_at IS NULL;
@@ -103,7 +105,8 @@ CREATE TABLE IF NOT EXISTS lessons (
 );
 
 CREATE TABLE IF NOT EXISTS metrics_daily (
-    date TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'paper_live',
     win_rate REAL,
     sharpe REAL,
     max_drawdown REAL,
@@ -111,7 +114,8 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
     brier_score REAL,
     n_trades INTEGER,
     pnl_usd REAL,
-    api_cost_usd REAL
+    api_cost_usd REAL,
+    PRIMARY KEY (date, source)
 );
 
 CREATE TABLE IF NOT EXISTS api_spend (
@@ -141,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_book_token_time ON book_snapshots(token_id, captu
 
 TRADES_EXTRA_COLUMNS = {
     "intended_size": "REAL",
+    "source": "TEXT NOT NULL DEFAULT 'paper_live'",
 }
 
 MARKETS_FLAGGED_EXTRA_COLUMNS = {
@@ -162,6 +167,8 @@ async def open_db(path: Path | str = DEFAULT_DB_PATH) -> aiosqlite.Connection:
     await conn.executescript(SCHEMA)
     await _ensure_markets_flagged_columns(conn)
     await _ensure_trades_columns(conn)
+    await _ensure_metrics_daily_source(conn)
+    await _backfill_provenance(conn)
     await conn.commit()
     return conn
 
@@ -175,7 +182,50 @@ async def _ensure_trades_columns(conn: aiosqlite.Connection) -> None:
     existing = {row[1] for row in await cur.fetchall()}
     for name, column_type in TRADES_EXTRA_COLUMNS.items():
         if name not in existing:
-            await conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {column_type}")
+            await _add_column(conn, "trades", name, column_type)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trades_source_outcome ON trades(source, outcome, closed_at)"
+    )
+
+
+async def _ensure_metrics_daily_source(conn: aiosqlite.Connection) -> None:
+    cur = await conn.execute("PRAGMA table_info(metrics_daily)")
+    rows = await cur.fetchall()
+    columns = {row[1] for row in rows}
+    pk_columns = [row[1] for row in sorted(rows, key=lambda r: r[5]) if row[5] > 0]
+    if "source" in columns and pk_columns == ["date", "source"]:
+        return
+
+    await conn.execute("ALTER TABLE metrics_daily RENAME TO metrics_daily_legacy")
+    await conn.execute(
+        """
+        CREATE TABLE metrics_daily (
+            date TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'paper_live',
+            win_rate REAL,
+            sharpe REAL,
+            max_drawdown REAL,
+            profit_factor REAL,
+            brier_score REAL,
+            n_trades INTEGER,
+            pnl_usd REAL,
+            api_cost_usd REAL,
+            PRIMARY KEY (date, source)
+        )
+        """
+    )
+    source_expr = "COALESCE(source, 'paper_live')" if "source" in columns else "'paper_live'"
+    await conn.execute(
+        f"""
+        INSERT OR REPLACE INTO metrics_daily
+            (date, source, win_rate, sharpe, max_drawdown, profit_factor,
+             brier_score, n_trades, pnl_usd, api_cost_usd)
+        SELECT date, {source_expr}, win_rate, sharpe, max_drawdown, profit_factor,
+               brier_score, n_trades, pnl_usd, api_cost_usd
+        FROM metrics_daily_legacy
+        """
+    )
+    await conn.execute("DROP TABLE metrics_daily_legacy")
 
 
 async def _ensure_markets_flagged_columns(conn: aiosqlite.Connection) -> None:
@@ -183,4 +233,33 @@ async def _ensure_markets_flagged_columns(conn: aiosqlite.Connection) -> None:
     existing = {row[1] for row in await cur.fetchall()}
     for name, column_type in MARKETS_FLAGGED_EXTRA_COLUMNS.items():
         if name not in existing:
-            await conn.execute(f"ALTER TABLE markets_flagged ADD COLUMN {name} {column_type}")
+            await _add_column(conn, "markets_flagged", name, column_type)
+
+
+async def _backfill_provenance(conn: aiosqlite.Connection) -> None:
+    await conn.execute(
+        "UPDATE trades SET source='backtest' WHERE source='paper_live' AND condition_id LIKE 'bt_%'"
+    )
+    await conn.execute(
+        """
+        DELETE FROM metrics_daily
+        WHERE source='paper_live'
+          AND COALESCE(n_trades, 0) != (
+              SELECT COUNT(*)
+              FROM trades t
+              WHERE t.source='paper_live'
+                AND t.outcome IN ('YES', 'NO')
+                AND t.is_paper=1
+                AND t.closed_at IS NOT NULL
+                AND date(t.closed_at, 'unixepoch', 'localtime') = metrics_daily.date
+          )
+        """
+    )
+
+
+async def _add_column(conn: aiosqlite.Connection, table: str, name: str, column_type: str) -> None:
+    try:
+        await conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise

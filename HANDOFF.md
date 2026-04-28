@@ -2,7 +2,7 @@
 
 ## Current Branch
 
-`feature/resume-mvp`
+`feature/metrics-provenance`
 
 ## Key Commits
 
@@ -27,17 +27,18 @@
 - `48d3c85` - `fix: wire TRAINING_DATA_PATH env override into load_settings()`
 - `b14f5af` - merge `origin/main` into `feature/resume-mvp`; reconcile partial-fill, postmortem, and WS runtime APIs
 - `194fbe8` - `docs: add paper daemon runbook and tmux harness`
+- pending - metrics provenance: separate `paper_live` and `backtest` trades/metrics
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Full test suite passes: `303 passed` with `.venv/bin/pytest`.
-- Non-integration suite passes: `302 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Full test suite passes: `313 passed` with `.venv/bin/pytest -q`.
+- Focused provenance suite passes: `51 passed` across storage, metrics, backtest, and status tests.
 - Ruff passes: `All checks passed`.
 - Paper-run tmux harness is available at `scripts/paper-daemon`; runbook is `docs/RUNBOOK.md`.
-- `scripts/paper-daemon status` works and forces `LIVE_TRADING=false` before invoking daemon status.
+- `scripts/paper-daemon status` works, forces `LIVE_TRADING=false`, and reports paper-live metrics/acceptance only.
 - Local paper-mode smoke command works:
 
 ```bash
@@ -70,7 +71,7 @@ Observed output (2026-04-27):
 - Multi-AI workflow guide: `docs/AI_COLLABORATION.md`
 - V1 scope remains Polymarket-only, Python, XGBoost + Claude hybrid, always-on daemon, paper trading only.
 - Live trading is intentionally forced disabled in `RuntimeSettings.live_trading_enabled`, even if `LIVE_TRADING=true`.
-- The local runtime DB currently reports the acceptance gate as met, likely because prior backtest/paper data populated `metrics_daily`; v1 still must remain paper-only.
+- Backtest rows are tagged `source='backtest'`; paper daemon rows default to `source='paper_live'`. The default acceptance gate only evaluates `paper_live`.
 - Polymarket dependency was updated to `py-clob-client-v2>=1.0.0` for the CLOB V2 migration.
 - `.claude/settings*.json`, the PDF, `.venv`, runtime DB, cache folders, and generated data are ignored.
 
@@ -219,11 +220,19 @@ Observed output (2026-04-27):
 - `docs/RUNBOOK.md` documents startup, monitoring, logs, shutdown, status checks, and safety rules.
 - `README.md` now points paper operation at the runbook and removes the old "one-flag flip" live-trading wording.
 
+### Metrics provenance (in progress)
+
+- `trades.source` defaults to `paper_live`; backtest writes `source='backtest'`.
+- `metrics_daily` is keyed by `(date, source)` so backtest and live paper metrics do not overwrite each other.
+- `acceptance_criteria_met()`, `persist_daily_metrics()`, `recent_daily_metrics()`, risk exposure, daily loss, and open-position queries filter to `paper_live` by default.
+- Legacy DB migration adds source columns, backfills `bt_%` trades to `backtest`, and removes stale paper-live metric rows whose counts no longer match paper-live trades.
+- `--status` labels the gate as the paper-live acceptance gate.
+
 ## Next Highest-Value Work
 
-1. **Run supervised paper daemon** — start with `scripts/paper-daemon start`, monitor with `scripts/paper-daemon status` and logs, and let it accumulate paper executions.
-2. **Separate backtest metrics from live paper-run metrics** — the local DB can report acceptance gate as met from historical/backtest data; add a provenance field or separate DB/run mode before treating status as operational evidence.
-3. **Feature retraining after paper run** — once fresh paper data is clearly separated and enough trades have settled, run `--check-retrain` to incorporate actual market behavior.
+1. **Open PR for metrics provenance** — push `feature/metrics-provenance` and merge after review.
+2. **Run supervised paper daemon** — start with `scripts/paper-daemon start`, monitor with `scripts/paper-daemon status` and logs, and let it accumulate paper executions.
+3. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
 4. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
