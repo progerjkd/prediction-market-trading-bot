@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +21,7 @@ def _book_event(token_id: str, *, bid: float = 0.52, ask: float = 0.55, key: str
         key: token_id,
         "bids": [{"price": str(bid), "size": "100"}],
         "asks": [{"price": str(ask), "size": "50"}],
-        "timestamp": "1700000000",
+        "timestamp": str(int(time.time())),
     }
 
 

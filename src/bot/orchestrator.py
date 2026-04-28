@@ -121,7 +121,11 @@ async def run_once(
         seen_ids = await recently_flagged_condition_ids(conn, dedup_cutoff)
         markets_to_scan = [m for m in markets_ranked[:max_markets] if m.condition_id not in seen_ids]
 
-        candidates = await _candidates_from_markets(client, markets_to_scan, book_cache=book_cache)
+        candidates = await _candidates_from_markets(
+            client, markets_to_scan,
+            book_cache=book_cache,
+            max_cache_age=settings.ws_orderbook_max_age_seconds,
+        )
         flagged = filter_tradeable_markets(
             candidates,
             min_volume=settings.scan_min_volume,
@@ -234,13 +238,15 @@ async def _candidates_from_markets(
     client: PolymarketClient | Any,
     markets: list[Market],
     book_cache: OrderBookCache | None = None,
+    max_cache_age: int = 300,
 ) -> list[MarketCandidate]:
     candidates: list[MarketCandidate] = []
+    stale_cutoff = int(time.time()) - max_cache_age
     for market in markets:
         if market.closed:
             continue
         cached = book_cache.get(market.yes_token) if book_cache else None
-        if cached is not None:
+        if cached is not None and cached.timestamp >= stale_cutoff:
             book = cached
         else:
             try:
