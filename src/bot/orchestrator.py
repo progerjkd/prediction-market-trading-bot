@@ -29,6 +29,7 @@ from bot.storage.models import (
 from bot.storage.repo import (
     close_trade,
     daily_api_cost_usd,
+    daily_gain_usd,
     daily_loss_usd,
     fetch_open_trades,
     insert_api_spend,
@@ -556,6 +557,7 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
             daily_loss_usd=await daily_loss_usd(conn, day_start),
             drawdown_pct=0.0,
             daily_api_cost_usd=await daily_api_cost_usd(conn, day_start),
+            daily_gain_usd=await daily_gain_usd(conn, day_start),
         ),
         BudgetLimits(
             stop_file=settings.stop_file,
@@ -563,6 +565,7 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
             daily_loss_pct=settings.daily_loss_pct,
             max_drawdown_pct=settings.max_drawdown_pct,
             daily_api_cost_limit=settings.daily_api_cost_limit,
+            daily_gain_pct=settings.daily_gain_pct,
         ),
     )
 

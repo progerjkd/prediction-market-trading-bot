@@ -180,6 +180,16 @@ async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int, source: str 
     return float(row[0]) if row else 0.0
 
 
+async def daily_gain_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) "
+        "FROM trades WHERE closed_at >= ? AND source = ?",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
 async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_live") -> list[OpenTradeRecord]:
     """Return all open (unclosed) paper trades with their market end_date_iso."""
     cur = await conn.execute(

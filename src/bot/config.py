@@ -31,6 +31,7 @@ class RuntimeSettings:
     edge_threshold: float = 0.04
     daily_api_cost_limit: float = 50.0
     daily_loss_pct: float = 0.15
+    daily_gain_pct: float = 1.0
     max_drawdown_pct: float = 0.08
     max_open_positions: int = 15
     max_position_pct: float = 0.05
@@ -92,6 +93,7 @@ def load_settings() -> RuntimeSettings:
         edge_threshold=_env_float("EDGE_THRESHOLD", 0.04),
         daily_api_cost_limit=_env_float("DAILY_API_COST_LIMIT", 50.0),
         daily_loss_pct=_env_float("DAILY_LOSS_LIMIT_PCT", 0.15),
+        daily_gain_pct=_env_float("DAILY_GAIN_PCT", 1.0),
         max_drawdown_pct=_env_float("MAX_DRAWDOWN_PCT", 0.08),
         max_open_positions=_env_int("MAX_OPEN_POSITIONS", 15),
         max_position_pct=_env_float("MAX_POSITION_PCT", 0.05),
