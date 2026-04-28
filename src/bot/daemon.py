@@ -16,6 +16,7 @@ from bot.mock_data import MockPolymarketClient
 from bot.orchestrator import run_once, summary_to_json
 from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber
 from bot.storage.db import open_db
+from bot.storage.repo import acceptance_criteria_met, recent_daily_metrics
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mock-ai", action="store_true", help="Use deterministic local probabilities")
     parser.add_argument("--scan-only", action="store_true", help="Only scan and persist flagged markets")
     parser.add_argument("--max-markets", type=int, default=10, help="Maximum markets to inspect per pass")
+    parser.add_argument("--status", action="store_true", help="Print recent metrics and acceptance gate, then exit")
     return parser
 
 
@@ -165,6 +167,27 @@ async def _run_repeating(
                 await task
 
 
+async def _print_status(conn) -> None:
+    rows = await recent_daily_metrics(conn, days=7)
+    print("=== Recent daily metrics (last 7 days) ===")
+    if not rows:
+        print("  (no data yet)")
+    else:
+        print(f"  {'date':<12} {'n_trades':>8} {'win_rate':>9} {'brier':>7} {'pnl_usd':>9} {'sharpe':>7}")
+        for r in rows:
+            print(
+                f"  {r['date']:<12} {r['n_trades']:>8} "
+                f"{r['win_rate']:>8.1%} {r['brier_score']:>7.3f} "
+                f"{r['pnl_usd']:>9.2f} {r['sharpe']:>7.2f}"
+            )
+    met, reason = await acceptance_criteria_met(conn)
+    print()
+    if met:
+        print("=== Acceptance gate: MET — paper trading criteria satisfied ===")
+    else:
+        print(f"=== Acceptance gate: NOT MET — {reason} ===")
+
+
 async def async_main(argv: list[str] | None = None) -> int:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -178,6 +201,10 @@ async def async_main(argv: list[str] | None = None) -> int:
     shutdown = _DaemonShutdown()
     cleanup_signal_handlers = _install_signal_handlers(shutdown)
     try:
+        if args.status:
+            await _print_status(conn)
+            return 0
+
         if args.once:
             summary = await run_once(
                 settings=settings,

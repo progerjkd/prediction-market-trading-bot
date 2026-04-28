@@ -273,6 +273,25 @@ async def acceptance_criteria_met(conn: aiosqlite.Connection) -> tuple[bool, str
     return True, ""
 
 
+async def recent_daily_metrics(conn: aiosqlite.Connection, days: int = 7) -> list[dict]:
+    """Return the most recent `days` rows from metrics_daily, newest first."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
+    cur = await conn.execute(
+        "SELECT date, win_rate, brier_score, n_trades, pnl_usd, sharpe, api_cost_usd "
+        "FROM metrics_daily WHERE date >= ? ORDER BY date DESC",
+        (cutoff,),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "date": r[0], "win_rate": r[1], "brier_score": r[2],
+            "n_trades": r[3], "pnl_usd": r[4], "sharpe": r[5], "api_cost_usd": r[6],
+        }
+        for r in rows
+    ]
+
+
 async def insert_book_snapshot(
     conn: aiosqlite.Connection,
     token_id: str,
