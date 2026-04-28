@@ -17,6 +17,7 @@
 - `01770cb` - `feat: dynamic WS token subscription update after each scan pass`
 - `3c93b8b` - `feat: narrative score from Claude reasoning wired into XGBoost features`
 - `fd794c4` - `feat: --check-retrain trigger and retrain_needed() guard`
+- `72675cb` - `feat: API spend tracking wired end-to-end`
 - `6527ded` - `feat: metrics persistence and acceptance gate`
 - `4c2b379` - `feat: retrain automation with deployment guardrails`
 - `79b5266` - `feat: --status dashboard with acceptance gate and recent metrics`
@@ -28,7 +29,7 @@
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `245 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Deterministic tests pass: `255 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
@@ -172,6 +173,13 @@ Observed output (2026-04-26):
 - Score stored in prediction `components_json` as `narrative_score` and in `ResearchBrief.narrative_score`.
 - 8 tests in `tests/test_narrative_score.py`.
 
+### API spend tracking (72675cb)
+
+- `cost_usd_from_usage(usage, model)` in `claude/client.py` — computes cost from Anthropic token pricing (Sonnet $3/$15/$0.30 per MTok; Opus $15/$75/$1.50; Haiku $0.80/$4/$0.08).
+- `forecast_probability()` populates `ForecastResult.cost_usd` from live usage data.
+- `run_once()` inserts one `ApiSpend` row per prediction so `daily_api_cost_usd()` and the `--status` dashboard have real data.
+- 10 tests in `tests/test_api_spend.py`.
+
 ### --check-retrain trigger (fd794c4)
 
 - `retrain_needed(csv_path, meta_path, min_new_rows=500)` compares current CSV row count to `n_rows` in `xgboost.meta.json`. Returns True if 500+ new rows (or no prior model).
@@ -190,8 +198,8 @@ Observed output (2026-04-26):
 
 ## Next Highest-Value Work
 
-1. **API spend tracking** — `ApiSpend` model and `insert_api_spend` exist in storage but `ClaudeForecastClient` never calls it. Wire `ForecastResult.cost_usd` into `insert_api_spend` so the daily API cost budget gate has real data.
-2. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline including WS subscription update still works end-to-end.
+1. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline (WS subscription, momentum, narrative score) works end-to-end.
+2. **Accumulate paper trades** — run the daemon continuously until 50+ paper trades settle so `acceptance_criteria_met()` can be evaluated against real data.
 3. **Feature retraining after paper run** — once 50+ paper trades have settled, run `--check-retrain` to incorporate fresh signal distributions from actual market behavior.
 4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
