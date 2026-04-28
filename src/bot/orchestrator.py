@@ -28,6 +28,7 @@ from bot.storage.models import (
 )
 from bot.storage.repo import (
     close_trade,
+    consecutive_losses,
     daily_api_cost_usd,
     daily_gain_usd,
     daily_loss_usd,
@@ -581,7 +582,7 @@ def _is_expired(end_date_iso: str | None, now: int) -> bool:
 async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSettings) -> str | None:
     now = int(time.time())
     day_start = now - (now % 86_400)
-    return halt_reason(
+    reason = halt_reason(
         RuntimeBudgetSnapshot(
             daily_loss_usd=await daily_loss_usd(conn, day_start),
             drawdown_pct=0.0,
@@ -597,6 +598,13 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
             daily_gain_pct=settings.daily_gain_pct,
         ),
     )
+    if reason:
+        return reason
+    if settings.max_consecutive_losses > 0:
+        streak = await consecutive_losses(conn)
+        if streak >= settings.max_consecutive_losses:
+            return f"consecutive loss streak {streak} >= limit {settings.max_consecutive_losses}"
+    return None
 
 
 def _proposed_size_usd(*, p_model: float, p_market: float, settings: RuntimeSettings) -> float:
