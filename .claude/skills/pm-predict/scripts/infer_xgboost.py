@@ -40,5 +40,5 @@ def infer_probability(
     model.load_model(path)
     ordered = [features.get(name, 0.0) for name in FEATURE_NAMES]
     proba = model.predict_proba([ordered])[0][1]
-    importances = dict(zip(FEATURE_NAMES, model.feature_importances_, strict=False))
+    importances = {name: float(v) for name, v in zip(FEATURE_NAMES, model.feature_importances_, strict=False)}
     return float(proba), "xgboost_model", importances

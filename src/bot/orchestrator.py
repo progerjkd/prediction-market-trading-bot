@@ -315,11 +315,12 @@ async def _predict(
     if not mock_ai:
         forecast_cost_usd = forecast.cost_usd
 
+    xgb_importances: dict[str, float] = {}
     if mock_ai:
         xgboost_probability = min(0.95, candidate.mid_price + 0.12)
         xgb_source = "mock_ai"
     else:
-        xgboost_probability, xgb_source, _xgb_importances = xgb_infer(
+        xgboost_probability, xgb_source, xgb_importances = xgb_infer(
             {
                 "current_mid": candidate.mid_price,
                 "spread": candidate.spread,
@@ -345,6 +346,7 @@ async def _predict(
     components["xgb_source"] = xgb_source
     components["narrative_score"] = narrative_score
     components["forecast_cost_usd"] = forecast_cost_usd
+    components["xgb_importances"] = xgb_importances
     return type(decision)(
         condition_id=decision.condition_id,
         token_id=decision.token_id,
