@@ -219,6 +219,24 @@ async def daily_trades_opened(conn: aiosqlite.Connection, since_ts: int, source:
     return int(row[0]) if row else 0
 
 
+async def current_drawdown_pct(conn: aiosqlite.Connection, base_bankroll: float) -> float:
+    """Current drawdown as a fraction: (peak_equity - current_equity) / peak_equity."""
+    cur = await conn.execute(
+        "SELECT pnl FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at ASC"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return 0.0
+    equity = base_bankroll
+    peak = equity
+    for (pnl,) in rows:
+        if pnl is not None:
+            equity += pnl
+        if equity > peak:
+            peak = equity
+    return (peak - equity) / peak if peak > 0 else 0.0
+
+
 async def bad_exit_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
     """condition_ids with STOP_LOSS or TIMEOUT outcomes closed after since_ts."""
     cur = await conn.execute(

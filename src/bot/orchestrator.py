@@ -30,6 +30,7 @@ from bot.storage.repo import (
     bad_exit_condition_ids,
     close_trade,
     consecutive_losses,
+    current_drawdown_pct,
     daily_api_cost_usd,
     daily_gain_usd,
     daily_loss_usd,
@@ -399,7 +400,7 @@ async def _paper_execute_if_allowed(
             open_positions=await open_positions_count(conn),
             total_exposure_usd=await total_open_exposure(conn),
             daily_loss_usd=await daily_loss_usd(conn, day_start),
-            drawdown_pct=0.0,
+            drawdown_pct=await current_drawdown_pct(conn, settings.bankroll_usdc),
             daily_api_cost_usd=await daily_api_cost_usd(conn, day_start),
             stop_file=settings.stop_file,
         ),
@@ -600,7 +601,7 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
     reason = halt_reason(
         RuntimeBudgetSnapshot(
             daily_loss_usd=await daily_loss_usd(conn, day_start),
-            drawdown_pct=0.0,
+            drawdown_pct=await current_drawdown_pct(conn, settings.bankroll_usdc),
             daily_api_cost_usd=await daily_api_cost_usd(conn, day_start),
             daily_gain_usd=await daily_gain_usd(conn, day_start),
         ),
