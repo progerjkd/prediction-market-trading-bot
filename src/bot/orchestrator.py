@@ -316,7 +316,7 @@ async def _predict(
         xgboost_probability = min(0.95, candidate.mid_price + 0.12)
         xgb_source = "mock_ai"
     else:
-        xgboost_probability, xgb_source = xgb_infer(
+        xgboost_probability, xgb_source, _xgb_importances = xgb_infer(
             {
                 "current_mid": candidate.mid_price,
                 "spread": candidate.spread,

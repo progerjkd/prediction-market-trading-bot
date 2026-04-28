@@ -75,7 +75,7 @@ def test_trained_model_returns_valid_probability(tmp_path):
     model_path = tmp_path / "xgboost.json"
     train_from_dataframe(df, model_path=model_path)
 
-    prob, source = infer_probability(
+    prob, source, _ = infer_probability(
         {
             "current_mid": 0.7,
             "spread": 0.02,
@@ -105,9 +105,9 @@ def test_trained_model_is_monotone_in_current_mid(tmp_path):
         "momentum_1h": 0,
         "momentum_24h": 0,
     }
-    prob_low, _ = infer_probability({**base, "current_mid": 0.2}, model_path=model_path)
-    prob_mid, _ = infer_probability({**base, "current_mid": 0.5}, model_path=model_path)
-    prob_high, _ = infer_probability({**base, "current_mid": 0.8}, model_path=model_path)
+    prob_low, *_ = infer_probability({**base, "current_mid": 0.2}, model_path=model_path)
+    prob_mid, *_ = infer_probability({**base, "current_mid": 0.5}, model_path=model_path)
+    prob_high, *_ = infer_probability({**base, "current_mid": 0.8}, model_path=model_path)
 
     assert prob_low < prob_mid < prob_high
 
@@ -118,7 +118,7 @@ def test_trained_model_is_monotone_in_current_mid(tmp_path):
 
 
 def test_infer_probability_falls_back_when_model_missing(tmp_path):
-    prob, source = infer_probability(
+    prob, source, _ = infer_probability(
         {"current_mid": 0.6, "spread": 0.02, "volume_24h": 0,
          "days_to_resolution": 1, "narrative_score": 0,
          "momentum_1h": 0, "momentum_24h": 0},

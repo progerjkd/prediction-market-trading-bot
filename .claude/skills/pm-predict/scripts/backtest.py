@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from bot.config import RuntimeSettings
 
 # Lazy-import skill scripts already on sys.path via ensure_skill_script_paths()
-def xgb_infer(features: dict[str, Any], model_path: Path) -> tuple[float, str]:
+def xgb_infer(features: dict[str, Any], model_path: Path) -> tuple[float, str, dict]:
     from infer_xgboost import infer_probability
     return infer_probability(features, model_path=model_path)
 
@@ -57,7 +57,7 @@ async def run_backtest(
         label = int(row.get("label", 0))
 
         features = {col: float(row.get(col, 0.0)) for col in FEATURE_COLS}
-        xgb_prob, _ = xgb_infer(features, model_path)
+        xgb_prob, _, _imp = xgb_infer(features, model_path)
         edge = xgb_prob - mid
 
         if edge <= settings.edge_threshold:
