@@ -109,7 +109,7 @@ async def run_once(
     )
     forecaster = claude_client or ClaudeForecastClient()
     try:
-        settled = await _settle_expired_trades(conn, client)
+        settled = await _settle_expired_trades(conn, client, settings=settings)
 
         fetch_limit = max(settings.scan_fetch_limit, max_markets)
         markets = await client.list_markets(limit=fetch_limit, active_only=True)
@@ -427,12 +427,14 @@ async def _settle_expired_trades(
     client: Any,
     *,
     failure_log_path: Path | None = None,
+    settings: RuntimeSettings | None = None,
 ) -> int:
     """Close paper trades whose markets have resolved; run postmortem on each."""
     log_path = failure_log_path or FAILURE_LOG_PATH
     open_trades = await fetch_open_trades(conn)
     now = int(time.time())
     settled = 0
+    timeout_cutoff = now - (settings.position_timeout_days if settings else 30) * 86_400
 
     for record in open_trades:
         if record.end_date_iso and not _is_expired(record.end_date_iso, now):
@@ -445,6 +447,18 @@ async def _settle_expired_trades(
             continue
 
         if not resolution.resolved:
+            # Force-close if market expired beyond the timeout grace period and still unresolved
+            if record.end_date_iso and _is_expired(record.end_date_iso, timeout_cutoff):
+                fill = record.fill_price or 0.0
+                pnl = -fill * record.size  # worst-case: price went to 0
+                await close_trade(conn, record.trade_id, pnl=pnl, outcome="TIMEOUT")
+                await insert_lesson(
+                    conn,
+                    Lesson(trade_id=record.trade_id, cause="timeout", rule_proposed="force_close",
+                           notes="market did not resolve within timeout window"),
+                )
+                log.info("timeout-closed trade %d: pnl=%.2f", record.trade_id, pnl)
+                settled += 1
             continue
 
         final_price = resolution.final_yes_price if resolution.final_yes_price is not None else 0.0

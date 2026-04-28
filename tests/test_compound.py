@@ -31,8 +31,9 @@ async def db(tmp_path):
 
 @pytest.fixture
 def past_end_date():
-    """ISO date string in the past (yesterday)."""
-    return "2020-01-01T00:00:00Z"
+    """ISO date string 1 day in the past — expired but within the 30-day timeout grace period."""
+    from datetime import UTC, datetime, timedelta
+    return (datetime.now(UTC) - timedelta(days=1)).isoformat()
 
 
 @pytest.fixture
