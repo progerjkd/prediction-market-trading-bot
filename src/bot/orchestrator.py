@@ -40,6 +40,7 @@ from bot.storage.repo import (
     insert_trade,
     open_positions_count,
     persist_daily_metrics,
+    recently_flagged_condition_ids,
     total_open_exposure,
 )
 
@@ -113,7 +114,12 @@ async def run_once(
         fetch_limit = max(settings.scan_fetch_limit, max_markets)
         markets = await client.list_markets(limit=fetch_limit, active_only=True)
         markets_ranked = sorted(markets, key=lambda m: m.volume_24h * m.liquidity, reverse=True)
-        candidates = await _candidates_from_markets(client, markets_ranked[:max_markets], book_cache=book_cache)
+
+        dedup_cutoff = int(time.time()) - settings.scan_interval_seconds
+        seen_ids = await recently_flagged_condition_ids(conn, dedup_cutoff)
+        markets_to_scan = [m for m in markets_ranked[:max_markets] if m.condition_id not in seen_ids]
+
+        candidates = await _candidates_from_markets(client, markets_to_scan, book_cache=book_cache)
         flagged = filter_tradeable_markets(
             candidates,
             min_volume=settings.scan_min_volume,

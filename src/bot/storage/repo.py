@@ -59,6 +59,16 @@ async def latest_flagged_markets(
     return [FlaggedMarket(*row) for row in rows]
 
 
+async def recently_flagged_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
+    """Return condition_ids flagged at or after since_ts (Unix seconds)."""
+    cur = await conn.execute(
+        "SELECT DISTINCT condition_id FROM markets_flagged WHERE flagged_at >= ?",
+        (since_ts,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
+
+
 async def insert_research_brief(conn: aiosqlite.Connection, b: ResearchBrief) -> None:
     await conn.execute(
         "INSERT OR REPLACE INTO research_briefs "
