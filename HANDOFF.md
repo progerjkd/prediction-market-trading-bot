@@ -14,6 +14,9 @@
 - `5902177` - `feat: compound/postmortem loop — settle expired paper trades automatically`
 - `7d585b4` - `feat: persist no-fill and partial-fill outcomes with intended_size`
 - `b75333b` - `feat: WebSocket orderbook cache wired into daemon and orchestrator`
+- `01770cb` - `feat: dynamic WS token subscription update after each scan pass`
+- `3c93b8b` - `feat: narrative score from Claude reasoning wired into XGBoost features`
+- `fd794c4` - `feat: --check-retrain trigger and retrain_needed() guard`
 - `6527ded` - `feat: metrics persistence and acceptance gate`
 - `4c2b379` - `feat: retrain automation with deployment guardrails`
 - `79b5266` - `feat: --status dashboard with acceptance gate and recent metrics`
@@ -25,7 +28,7 @@
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `220 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Deterministic tests pass: `245 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
@@ -156,6 +159,27 @@ Observed output (2026-04-26):
 - `recent_daily_metrics(conn, days=7)` added to `repo.py`.
 - 8 tests in `tests/test_status_dashboard.py`.
 
+### WS token subscription update (01770cb)
+
+- `RunSummary.flagged_yes_tokens` field (list, default `[]`). Both return paths in `run_once()` populate it.
+- `OrderBookSubscriber.update_tokens(token_ids)` replaces the subscribed token list (deduped). Takes effect on next reconnect.
+- `daemon._run_repeating` calls `subscriber.update_tokens(summary.flagged_yes_tokens)` after each pass.
+- 7 tests in `tests/test_ws_token_update.py`.
+
+### Narrative score from Claude reasoning (3c93b8b)
+
+- `lexical_sentiment_score(claude_reason)` called in `_predict()` before XGBoost inference so `narrative_score` is a real feature (not 0.0).
+- Score stored in prediction `components_json` as `narrative_score` and in `ResearchBrief.narrative_score`.
+- 8 tests in `tests/test_narrative_score.py`.
+
+### --check-retrain trigger (fd794c4)
+
+- `retrain_needed(csv_path, meta_path, min_new_rows=500)` compares current CSV row count to `n_rows` in `xgboost.meta.json`. Returns True if 500+ new rows (or no prior model).
+- `run_retrain_pipeline(settings)` reads training CSV and calls `retrain()`.
+- `--check-retrain` daemon flag runs the check and conditionally retrains; exits with result message.
+- `training_data_path: Path = Path("data/training_data.csv")` added to `RuntimeSettings`.
+- 10 tests in `tests/test_check_retrain.py`.
+
 ### Live momentum signals (10b2bba)
 
 - `OrderBookCache` now tracks a 25h rolling mid-price history per token.
@@ -166,9 +190,9 @@ Observed output (2026-04-26):
 
 ## Next Highest-Value Work
 
-1. **Narrative score from research** — `narrative_score` is still hardcoded to `0.0` in XGBoost inference. Wire the Claude research brief's bullish/bearish balance into a numeric score (-1.0 to +1.0) and pass it through.
-2. **Scheduled retrain trigger** — add a `--check-retrain` flag that fetches new resolved markets, compares row count to `xgboost.meta.json`, and runs `retrain.py` if 500+ new rows have accumulated.
-3. **WS token subscription update** — `OrderBookSubscriber` starts with `token_ids=[]`. After each scan pass, update the subscriber with the yes_tokens of flagged markets so WS momentum signals populate before the next pass.
+1. **API spend tracking** — `ApiSpend` model and `insert_api_spend` exist in storage but `ClaudeForecastClient` never calls it. Wire `ForecastResult.cost_usd` into `insert_api_spend` so the daily API cost budget gate has real data.
+2. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline including WS subscription update still works end-to-end.
+3. **Feature retraining after paper run** — once 50+ paper trades have settled, run `--check-retrain` to incorporate fresh signal distributions from actual market behavior.
 4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
