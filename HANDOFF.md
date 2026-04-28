@@ -25,14 +25,15 @@
 - `10b2bba` - `feat: live momentum signals from WS price history`
 - `740b11e` - `feat: WS reconnect on token update + lint cleanup`
 - `48d3c85` - `fix: wire TRAINING_DATA_PATH env override into load_settings()`
+- `b14f5af` - merge `origin/main` into `feature/resume-mvp`; reconcile partial-fill, postmortem, and WS runtime APIs
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `261 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
-- Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
+- Full test suite passes: `303 passed` with `.venv/bin/pytest`.
+- Non-integration suite passes: `302 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
 
@@ -43,7 +44,7 @@
 Expected smoke output shape:
 
 ```json
-{"flagged_markets": 1, "halt_reason": null, "paper_trades_written": 1, "predictions_written": 1, "scanned_markets": 1, "skipped_signals": 0}
+{"closed_positions": 0, "flagged_markets": 1, "flagged_yes_tokens": ["mock-yes-1"], "halt_reason": null, "lessons_written": 0, "no_fill_trades": 0, "paper_trades_written": 1, "predictions_written": 1, "scanned_markets": 1, "skipped_signals": 0, "trades_settled": 0}
 ```
 
 - Live scan command works against real Polymarket API:
@@ -52,9 +53,9 @@ Expected smoke output shape:
 .venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10
 ```
 
-Observed output (2026-04-26):
+Observed output (2026-04-27):
 ```json
-{"flagged_markets": 2, "halt_reason": null, "paper_trades_written": 0, "predictions_written": 0, "scanned_markets": 50, "skipped_signals": 0}
+{"closed_positions": 0, "flagged_markets": 2, "flagged_yes_tokens": ["77166477669007661974218999697956080000161736671391584414287437514245884953047", "24327803960645909378149041810697343640752122608192367041827900158592826352552"], "halt_reason": null, "lessons_written": 0, "no_fill_trades": 0, "paper_trades_written": 0, "predictions_written": 0, "scanned_markets": 50, "skipped_signals": 0, "trades_settled": 0}
 ```
 
 50 markets fetched across 5 pages (pagination working), 10 orderbooks queried, 2 met filter criteria.
@@ -127,11 +128,11 @@ Observed output (2026-04-26):
 - `RunSummary.trades_settled` counter.
 - 16 tests in `tests/test_compound.py`.
 
-### Partial-fill persistence (7d585b4)
+### Partial-fill persistence (7d585b4 + b14f5af reconciliation)
 
-- No-fill trades (book empty at execution time, after passing scan) persisted as `outcome="no_fill"`, `size=0`, `pnl=0`, immediately closed. Previously silently dropped.
-- `intended_size` field added to `Trade` model and DB (`trades` table). Additive migration via `_ensure_trades_columns()`.
-- All fills (full and partial) now record `intended_size`; unfilled = `intended_size - size`.
+- `paper_executions` table records every simulated execution attempt with `FULL_FILL`, `PARTIAL_FILL`, or `NO_FILL`.
+- Full and partial fills still create paper `trades`; each trade records `intended_size` and keeps `is_paper=True`.
+- No-fills are persisted as `paper_executions` only, with `trade_id=NULL`, `filled_size=0`, and no open/closed trade row created.
 - `RunSummary.no_fill_trades` counter.
 - 15 tests in `tests/test_partial_fill.py`.
 
@@ -207,8 +208,8 @@ Observed output (2026-04-26):
 
 ## Next Highest-Value Work
 
-1. **Live scan smoke** — run `.venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10` against live Polymarket to confirm the full pipeline (WS subscription, momentum, narrative score, API spend) works end-to-end.
-2. **Accumulate paper trades** — run the daemon continuously until 50+ paper trades settle so `acceptance_criteria_met()` can be evaluated against real data.
+1. **Accumulate paper trades** — run the daemon continuously until 50+ paper trades settle so `acceptance_criteria_met()` can be evaluated against real data.
+2. **Operational paper-run harness** — add a documented tmux/systemd-style runbook or script for starting/stopping the paper daemon, checking status, and tailing logs without touching live trading.
 3. **Feature retraining after paper run** — once 50+ paper trades have settled, run `--check-retrain` to incorporate fresh signal distributions from actual market behavior.
 4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
