@@ -274,6 +274,20 @@ async def consecutive_losses(conn: aiosqlite.Connection) -> int:
     return streak
 
 
+async def recent_win_rate(conn: aiosqlite.Connection, n: int) -> float | None:
+    """Win rate of the N most recent YES/NO closed trades (excludes TIMEOUT/STOP_LOSS)."""
+    cur = await conn.execute(
+        "SELECT outcome FROM trades WHERE closed_at IS NOT NULL AND outcome IN ('YES', 'NO') "
+        "ORDER BY closed_at DESC LIMIT ?",
+        (n,),
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return None
+    wins = sum(1 for (outcome,) in rows if outcome == "YES")
+    return wins / len(rows)
+
+
 async def current_brier_score(conn: aiosqlite.Connection) -> float | None:
     """Mean squared error of p_model vs outcome over all resolved YES/NO trades."""
     cur = await conn.execute(
