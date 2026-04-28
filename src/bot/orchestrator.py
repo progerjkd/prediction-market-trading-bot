@@ -100,7 +100,9 @@ async def run_once(
 ) -> RunSummary:
     budget_reason = await _current_halt_reason(conn, settings)
     if budget_reason:
-        return RunSummary(halt_reason=budget_reason)
+        summary = RunSummary(halt_reason=budget_reason)
+        _log_summary(summary)
+        return summary
 
     owns_client = polymarket_client is None
     client = polymarket_client or PolymarketClient(
@@ -132,7 +134,7 @@ async def run_once(
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
 
         if scan_only:
-            return RunSummary(
+            summary = RunSummary(
                 scanned_markets=len(markets),
                 flagged_markets=len(flagged),
                 trades_settled=settled,
@@ -140,6 +142,8 @@ async def run_once(
                 lessons_written=settled,
                 flagged_yes_tokens=[c.yes_token for c in flagged],
             )
+            _log_summary(summary)
+            return summary
 
         predictions_written = 0
         trades_written = 0
@@ -207,7 +211,7 @@ async def run_once(
         today = _today_iso()
         await persist_daily_metrics(conn, today)
 
-        return RunSummary(
+        summary = RunSummary(
             scanned_markets=len(markets),
             flagged_markets=len(flagged),
             predictions_written=predictions_written,
@@ -219,6 +223,8 @@ async def run_once(
             lessons_written=settled,
             flagged_yes_tokens=[c.yes_token for c in flagged],
         )
+        _log_summary(summary)
+        return summary
     finally:
         if owns_client:
             await client.close()
@@ -585,3 +591,17 @@ def summary_to_json(summary: RunSummary) -> str:
 def _today_iso() -> str:
     from datetime import date
     return date.today().isoformat()
+
+
+def _log_summary(summary: RunSummary) -> None:
+    log.info(
+        json.dumps({
+            "ts": int(time.time()),
+            "scanned": summary.scanned_markets,
+            "flagged": summary.flagged_markets,
+            "predictions": summary.predictions_written,
+            "trades": summary.paper_trades_written,
+            "settled": summary.trades_settled,
+            "halt": summary.halt_reason,
+        })
+    )
