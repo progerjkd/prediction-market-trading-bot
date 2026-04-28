@@ -219,6 +219,17 @@ async def daily_trades_opened(conn: aiosqlite.Connection, since_ts: int, source:
     return int(row[0]) if row else 0
 
 
+async def bad_exit_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
+    """condition_ids with STOP_LOSS or TIMEOUT outcomes closed after since_ts."""
+    cur = await conn.execute(
+        "SELECT condition_id FROM trades "
+        "WHERE outcome IN ('STOP_LOSS', 'TIMEOUT') AND closed_at >= ?",
+        (since_ts,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
+
+
 async def consecutive_losses(conn: aiosqlite.Connection) -> int:
     """Count of the most-recent consecutive closed trades with pnl < 0."""
     cur = await conn.execute(

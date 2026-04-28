@@ -27,6 +27,7 @@ from bot.storage.models import (
     Trade,
 )
 from bot.storage.repo import (
+    bad_exit_condition_ids,
     close_trade,
     consecutive_losses,
     daily_api_cost_usd,
@@ -159,8 +160,15 @@ async def run_once(
         no_fill_trades = 0
         skipped = 0
         held_condition_ids = await open_condition_ids(conn)
+        cooled_ids: set[str] = set()
+        if settings.market_cooldown_hours > 0:
+            cooldown_since = int(time.time()) - settings.market_cooldown_hours * 3600
+            cooled_ids = await bad_exit_condition_ids(conn, cooldown_since)
         for candidate in flagged:
             if candidate.condition_id in held_condition_ids:
+                skipped += 1
+                continue
+            if candidate.condition_id in cooled_ids:
                 skipped += 1
                 continue
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
