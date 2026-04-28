@@ -1,6 +1,7 @@
 """Smoke tests for storage layer (in-memory SQLite)."""
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 
 import pytest
@@ -121,6 +122,16 @@ async def test_open_db_migrates_legacy_metrics_and_trades_source_columns(tmp_pat
         assert row[0] == 0
     finally:
         await conn.close()
+
+
+async def test_open_db_allows_concurrent_initialization(tmp_path):
+    db_path = tmp_path / "concurrent.sqlite"
+
+    async def _open_and_close():
+        conn = await open_db(db_path)
+        await conn.close()
+
+    await asyncio.gather(*[_open_and_close() for _ in range(4)])
 
 
 async def test_insert_and_fetch_flagged_market(db):

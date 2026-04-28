@@ -1,6 +1,7 @@
 """Async SQLite storage with schema migration."""
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from pathlib import Path
@@ -161,8 +162,9 @@ async def open_db(path: Path | str = DEFAULT_DB_PATH) -> aiosqlite.Connection:
     """Open or create the SQLite DB at `path`. Applies schema idempotently."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(str(p))
-    await conn.execute("PRAGMA journal_mode=WAL")
+    conn = await aiosqlite.connect(str(p), timeout=30)
+    await conn.execute("PRAGMA busy_timeout=30000")
+    await _execute_with_lock_retry(conn, "PRAGMA journal_mode=WAL")
     await conn.execute("PRAGMA foreign_keys=ON")
     await conn.executescript(SCHEMA)
     await _ensure_markets_flagged_columns(conn)
@@ -263,3 +265,20 @@ async def _add_column(conn: aiosqlite.Connection, table: str, name: str, column_
     except sqlite3.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
+
+
+async def _execute_with_lock_retry(
+    conn: aiosqlite.Connection,
+    sql: str,
+    *,
+    attempts: int = 10,
+    base_delay_seconds: float = 0.05,
+) -> None:
+    for attempt in range(attempts):
+        try:
+            await conn.execute(sql)
+            return
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            await asyncio.sleep(base_delay_seconds * (attempt + 1))
