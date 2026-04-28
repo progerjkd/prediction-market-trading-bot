@@ -110,7 +110,8 @@ async def run_once(
     try:
         settled = await _settle_expired_trades(conn, client)
 
-        markets = await client.list_markets(limit=max_markets, active_only=True)
+        fetch_limit = max(settings.scan_fetch_limit, max_markets)
+        markets = await client.list_markets(limit=fetch_limit, active_only=True)
         markets_ranked = sorted(markets, key=lambda m: m.volume_24h * m.liquidity, reverse=True)
         candidates = await _candidates_from_markets(client, markets_ranked[:max_markets], book_cache=book_cache)
         flagged = filter_tradeable_markets(

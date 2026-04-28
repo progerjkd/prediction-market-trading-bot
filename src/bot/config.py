@@ -47,6 +47,7 @@ class RuntimeSettings:
     scan_max_spread: float = 0.05
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
+    scan_fetch_limit: int = 50
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -105,6 +106,7 @@ def load_settings() -> RuntimeSettings:
         scan_max_spread=_env_float("SCAN_MAX_SPREAD", 0.05),
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
+        scan_fetch_limit=_env_int("SCAN_FETCH_LIMIT", 50),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )
