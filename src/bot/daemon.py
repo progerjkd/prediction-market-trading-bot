@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from bot.skills import ensure_skill_script_paths
 
 ensure_skill_script_paths()
+from backtest import run_backtest  # noqa: E402
 from retrain import retrain, retrain_needed  # noqa: E402
 
 from bot.config import load_settings  # noqa: E402
@@ -47,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-markets", type=int, default=10, help="Maximum markets to inspect per pass")
     parser.add_argument("--status", action="store_true", help="Print recent metrics and acceptance gate, then exit")
     parser.add_argument("--check-retrain", action="store_true", help="Retrain XGBoost if 500+ new rows; exit")
+    parser.add_argument("--backtest", action="store_true", help="Replay training CSV through XGBoost; write settled trades; show acceptance gate")
     return parser
 
 
@@ -239,6 +241,22 @@ async def async_main(argv: list[str] | None = None) -> int:
                 print(f"[OK] model deployed — accuracy={m.get('accuracy', '?'):.3f}")
             else:
                 print(f"[SKIP] model NOT deployed: {result['reason']}")
+            return 0
+
+        if args.backtest:
+            import pandas as pd
+            csv_path = settings.training_data_path
+            if not csv_path.exists():
+                print(f"[ERROR] training data not found: {csv_path}")
+                return 1
+            df = pd.read_csv(csv_path)
+            result = await run_backtest(conn, df, model_path=settings.xgboost_model_path, settings=settings)
+            print(
+                f"backtest complete: {result['trades_written']} trades, "
+                f"win_rate={result['win_rate']:.1%}, "
+                f"{result['rows_skipped']} rows skipped"
+            )
+            await _print_status(conn)
             return 0
 
         if args.once:
