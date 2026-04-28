@@ -234,6 +234,26 @@ async def consecutive_losses(conn: aiosqlite.Connection) -> int:
     return streak
 
 
+async def current_brier_score(conn: aiosqlite.Connection) -> float | None:
+    """Mean squared error of p_model vs outcome over all resolved YES/NO trades."""
+    cur = await conn.execute(
+        """
+        SELECT p.p_model, t.outcome
+        FROM predictions p
+        JOIN trades t ON t.prediction_id = p.id
+        WHERE t.closed_at IS NOT NULL AND t.outcome IN ('YES', 'NO')
+        """
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return None
+    total = sum(
+        (p_model - (1.0 if outcome == "YES" else 0.0)) ** 2
+        for p_model, outcome in rows
+    )
+    return total / len(rows)
+
+
 async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_live") -> list[OpenTradeRecord]:
     """Return all open (unclosed) paper trades with their market end_date_iso."""
     cur = await conn.execute(
