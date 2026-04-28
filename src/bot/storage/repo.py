@@ -59,6 +59,16 @@ async def latest_flagged_markets(
     return [FlaggedMarket(*row) for row in rows]
 
 
+async def open_condition_ids(conn: aiosqlite.Connection, source: str = "paper_live") -> set[str]:
+    """Return condition_ids that have at least one open (unclosed) trade."""
+    cur = await conn.execute(
+        "SELECT DISTINCT condition_id FROM trades WHERE closed_at IS NULL AND source = ?",
+        (source,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
+
+
 async def recently_flagged_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
     """Return condition_ids flagged at or after since_ts (Unix seconds)."""
     cur = await conn.execute(

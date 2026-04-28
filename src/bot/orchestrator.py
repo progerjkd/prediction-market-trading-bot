@@ -39,6 +39,7 @@ from bot.storage.repo import (
     insert_prediction,
     insert_research_brief,
     insert_trade,
+    open_condition_ids,
     open_positions_count,
     persist_daily_metrics,
     recently_flagged_condition_ids,
@@ -154,7 +155,11 @@ async def run_once(
         trades_written = 0
         no_fill_trades = 0
         skipped = 0
+        held_condition_ids = await open_condition_ids(conn)
         for candidate in flagged:
+            if candidate.condition_id in held_condition_ids:
+                skipped += 1
+                continue
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
             prediction_id = await insert_prediction(
                 conn,
