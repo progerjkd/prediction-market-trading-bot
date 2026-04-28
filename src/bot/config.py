@@ -55,6 +55,8 @@ class RuntimeSettings:
     max_consecutive_losses: int = 0  # 0 = disabled
     max_daily_trades: int = 0  # 0 = disabled
     market_cooldown_hours: int = 0  # 0 = disabled
+    min_model_prob: float = 0.0  # 0.0 = disabled (no lower bound)
+    max_model_prob: float = 1.0  # 1.0 = disabled (no upper bound)
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -121,6 +123,8 @@ def load_settings() -> RuntimeSettings:
         max_consecutive_losses=_env_int("MAX_CONSECUTIVE_LOSSES", 0),
         max_daily_trades=_env_int("MAX_DAILY_TRADES", 0),
         market_cooldown_hours=_env_int("MARKET_COOLDOWN_HOURS", 0),
+        min_model_prob=_env_float("MIN_MODEL_PROB", 0.0),
+        max_model_prob=_env_float("MAX_MODEL_PROB", 1.0),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )

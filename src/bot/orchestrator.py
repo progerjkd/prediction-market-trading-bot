@@ -208,6 +208,10 @@ async def run_once(
                 skipped += 1
                 continue
 
+            if not (settings.min_model_prob <= decision.p_model <= settings.max_model_prob):
+                skipped += 1
+                continue
+
             execution_plan = await _paper_execute_if_allowed(
                 conn=conn,
                 client=client,
