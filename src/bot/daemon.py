@@ -24,9 +24,11 @@ from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # n
 from bot.storage.db import open_db  # noqa: E402
 from bot.storage.repo import (  # noqa: E402
     acceptance_criteria_met,
+    open_positions_count,
     persist_daily_metrics,
     recent_daily_metrics,
     skip_reason_counts,
+    total_open_exposure,
 )
 
 log = logging.getLogger(__name__)
@@ -213,6 +215,13 @@ async def _print_status(conn) -> None:
         print("=== Paper-live acceptance gate: MET — paper trading criteria satisfied ===")
     else:
         print(f"=== Paper-live acceptance gate: NOT MET — {reason} ===")
+
+    open_count = await open_positions_count(conn)
+    open_exposure = await total_open_exposure(conn)
+    print()
+    print("=== Open paper positions ===")
+    print(f"  count: {open_count}")
+    print(f"  exposure_usd: {open_exposure:.2f}")
 
     skip_counts = await skip_reason_counts(conn, since_seconds_ago=86_400)
     print()
