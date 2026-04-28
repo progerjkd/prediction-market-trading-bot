@@ -10,17 +10,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
+
+from bot.skills import ensure_skill_script_paths
+
+ensure_skill_script_paths()
 from retrain import retrain, retrain_needed  # noqa: E402
 
-from bot.config import load_settings
-from bot.mock_data import MockPolymarketClient
-from bot.orchestrator import (  # noqa: E402 (triggers ensure_skill_script_paths)
-    run_once,
-    summary_to_json,
-)
-from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber
-from bot.storage.db import open_db
-from bot.storage.repo import acceptance_criteria_met, recent_daily_metrics
+from bot.config import load_settings  # noqa: E402
+from bot.mock_data import MockPolymarketClient  # noqa: E402
+from bot.orchestrator import run_once, summary_to_json  # noqa: E402
+from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # noqa: E402
+from bot.storage.db import open_db  # noqa: E402
+from bot.storage.repo import acceptance_criteria_met, recent_daily_metrics  # noqa: E402
 
 log = logging.getLogger(__name__)
 
