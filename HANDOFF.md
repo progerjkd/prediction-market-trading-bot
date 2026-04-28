@@ -2,7 +2,7 @@
 
 ## Current Branch
 
-`feature/metrics-provenance`
+`feature/risk-controls-stack`
 
 ## Key Commits
 
@@ -27,18 +27,25 @@
 - `48d3c85` - `fix: wire TRAINING_DATA_PATH env override into load_settings()`
 - `b14f5af` - merge `origin/main` into `feature/resume-mvp`; reconcile partial-fill, postmortem, and WS runtime APIs
 - `194fbe8` - `docs: add paper daemon runbook and tmux harness`
-- pending - metrics provenance: separate `paper_live` and `backtest` trades/metrics
+- `7b80cf8` - `feat: persist skip diagnostics for paper decisions`
+- `0b1a7bd` - `feat: prefilter scan metadata before orderbooks`
+- `1a6928e` - `feat: show open paper exposure in status`
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Full test suite passes: `313 passed` with `.venv/bin/pytest -q`.
-- Focused provenance suite passes: `51 passed` across storage, metrics, backtest, and status tests.
+- Full test suite passes: `410 passed` with `.venv/bin/pytest -q`.
 - Ruff passes: `All checks passed`.
+- PR #7 is open: `https://github.com/progerjkd/prediction-market-trading-bot/pull/7`.
 - Paper-run tmux harness is available at `scripts/paper-daemon`; runbook is `docs/RUNBOOK.md`.
-- `scripts/paper-daemon status` works, forces `LIVE_TRADING=false`, and reports paper-live metrics/acceptance only.
+- `scripts/paper-daemon status` works, forces `LIVE_TRADING=false`, and reports paper-live metrics, acceptance, open exposure, and recent skip diagnostics.
+- Supervised paper daemon is running in tmux session `pm-bot-paper-live` with:
+  - DB: `data/paper-live.sqlite`
+  - STOP file: `data/PAPER_STOP`
+  - log: `data/logs/paper-live.log`
+  - attach: `PM_BOT_TMUX_SESSION=pm-bot-paper-live scripts/paper-daemon attach`
 - Local paper-mode smoke command works:
 
 ```bash
@@ -57,12 +64,12 @@ Expected smoke output shape:
 .venv/bin/python -m bot.daemon --once --paper --scan-only --max-markets 10
 ```
 
-Observed output (2026-04-27):
+Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 ```json
-{"closed_positions": 0, "flagged_markets": 2, "flagged_yes_tokens": ["77166477669007661974218999697956080000161736671391584414287437514245884953047", "24327803960645909378149041810697343640752122608192367041827900158592826352552"], "halt_reason": null, "lessons_written": 0, "no_fill_trades": 0, "paper_trades_written": 0, "predictions_written": 0, "scanned_markets": 50, "skipped_signals": 0, "trades_settled": 0}
+{"closed_positions": 0, "flagged_markets": 3, "flagged_yes_tokens": ["57301498276970257025109591078431189727442302532145853906375186182281603517458", "75262277240576503541125200255351734877619831936165222710769956674779076695947", "43891259347116330522865864075089973515827852946539612217753302847337982135578"], "halt_reason": null, "lessons_written": 0, "no_fill_trades": 0, "paper_trades_written": 1, "predictions_written": 3, "scanned_markets": 250, "skipped_signals": 2, "trades_settled": 0}
 ```
 
-50 markets fetched across 5 pages (pagination working), 10 orderbooks queried, 2 met filter criteria.
+250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
 ## Important Context
 
@@ -220,7 +227,7 @@ Observed output (2026-04-27):
 - `docs/RUNBOOK.md` documents startup, monitoring, logs, shutdown, status checks, and safety rules.
 - `README.md` now points paper operation at the runbook and removes the old "one-flag flip" live-trading wording.
 
-### Metrics provenance (in progress)
+### Metrics provenance
 
 - `trades.source` defaults to `paper_live`; backtest writes `source='backtest'`.
 - `metrics_daily` is keyed by `(date, source)` so backtest and live paper metrics do not overwrite each other.
@@ -228,12 +235,25 @@ Observed output (2026-04-27):
 - Legacy DB migration adds source columns, backfills `bt_%` trades to `backtest`, and removes stale paper-live metric rows whose counts no longer match paper-live trades.
 - `--status` labels the gate as the paper-live acceptance gate.
 
+### Skip diagnostics and scan selection
+
+- `skip_events` records scan, decision, risk, sizing, execution, cooldown, dedup, and position-gate skips.
+- `--status` prints recent skip reason counts for the last 24 hours.
+- Scan metadata filters now run before max-market slicing and orderbook fetch. Far-resolution, low-volume, low-liquidity, closed, and recently flagged markets no longer consume orderbook scan slots.
+- This fixed the supervised daemon stall where the top ranked markets were all `too_far_to_resolution` and the pass produced zero flagged markets.
+
+### Open exposure status
+
+- `--status` now prints current open paper position count and open exposure in USD.
+- This makes the tmux status pane show live paper activity even before positions have settled into daily metrics.
+
 ## Next Highest-Value Work
 
-1. **Open PR for metrics provenance** — push `feature/metrics-provenance` and merge after review.
-2. **Run supervised paper daemon** — start with `scripts/paper-daemon start`, monitor with `scripts/paper-daemon status` and logs, and let it accumulate paper executions.
-3. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
-4. Keep live trading unreachable in v1.
+1. **Merge PR #7** — risk-control stack plus skip diagnostics, metadata prefiltering, and open-exposure status.
+2. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running and watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`.
+3. **Improve scan fill rate if needed** — if many metadata-valid markets still fail on `wide_spread`, consider bounded orderbook over-sampling so the daemon can fill up to `max_markets` flagged candidates after spread filtering.
+4. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
+5. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
 
