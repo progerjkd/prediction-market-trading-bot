@@ -83,7 +83,7 @@ async def test_zero_liquidity_markets_rank_last(tmp_path):
     """Markets with liquidity=0 sink to the bottom regardless of volume."""
     markets = [
         _market("zero_liq",  volume=999_999.0, liquidity=0.0),
-        _market("low_both",  volume=100.0,     liquidity=100.0),  # score=10k — wins
+        _market("low_both",  volume=300.0,     liquidity=100.0),  # score=30k — wins
     ]
     fetched = await _run(tmp_path, markets, max_markets=1)
     assert fetched == ["yes_low_both"]

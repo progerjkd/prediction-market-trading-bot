@@ -89,7 +89,7 @@ async def test_run_once_uses_all_markets_when_pool_le_max(tmp_path):
 
     markets = [
         _market("a", volume=500.0),
-        _market("b", volume=100.0),
+        _market("b", volume=300.0),
     ]
 
     fetched_orderbooks: list[str] = []

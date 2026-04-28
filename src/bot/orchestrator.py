@@ -130,7 +130,29 @@ async def run_once(
 
         dedup_cutoff = int(time.time()) - settings.scan_interval_seconds
         seen_ids = await recently_flagged_condition_ids(conn, dedup_cutoff)
-        markets_to_scan = [m for m in markets_ranked[:max_markets] if m.condition_id not in seen_ids]
+        markets_to_scan: list[Market] = []
+        for market in markets_ranked:
+            if market.condition_id in seen_ids:
+                await _record_market_skip(
+                    conn,
+                    market=market,
+                    stage="dedup",
+                    reason="recently_flagged",
+                )
+                continue
+            metadata_skip_reason = _market_metadata_skip_reason(market, settings)
+            if metadata_skip_reason is not None:
+                await _record_market_skip(
+                    conn,
+                    market=market,
+                    stage="scan_filter",
+                    reason=metadata_skip_reason,
+                    detail=_market_detail(market),
+                )
+                continue
+            markets_to_scan.append(market)
+            if len(markets_to_scan) >= max_markets:
+                break
 
         candidates = await _candidates_from_markets(
             client, markets_to_scan,
@@ -774,6 +796,48 @@ async def _record_skip(
             detail=detail or {},
         ),
     )
+
+
+async def _record_market_skip(
+    conn: aiosqlite.Connection,
+    *,
+    market: Market,
+    stage: str,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await insert_skip_event(
+        conn,
+        SkipEvent(
+            condition_id=market.condition_id,
+            token_id=market.yes_token,
+            stage=stage,
+            reason=reason,
+            detail=detail or {},
+        ),
+    )
+
+
+def _market_detail(market: Market) -> dict[str, float | str | bool | None]:
+    return {
+        "volume_24h": market.volume_24h,
+        "liquidity": market.liquidity,
+        "days_to_resolution": _market_days_remaining(market.end_date_iso),
+        "closed": market.closed,
+    }
+
+
+def _market_metadata_skip_reason(market: Market, settings: RuntimeSettings) -> str | None:
+    days = _market_days_remaining(market.end_date_iso)
+    if market.closed:
+        return "closed_market"
+    if market.volume_24h < settings.scan_min_volume:
+        return "low_volume"
+    if days > settings.scan_max_days:
+        return "too_far_to_resolution"
+    if market.liquidity < settings.scan_min_liquidity:
+        return "low_liquidity"
+    return None
 
 
 def _candidate_detail(candidate: MarketCandidate) -> dict[str, float | str | None]:
