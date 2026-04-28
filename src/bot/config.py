@@ -104,4 +104,5 @@ def load_settings() -> RuntimeSettings:
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
+        training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )
