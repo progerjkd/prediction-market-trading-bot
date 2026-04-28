@@ -2,7 +2,7 @@
 
 ## Current Branch
 
-`feature/risk-controls-stack`
+`main`
 
 ## Key Commits
 
@@ -30,6 +30,7 @@
 - `7b80cf8` - `feat: persist skip diagnostics for paper decisions`
 - `0b1a7bd` - `feat: prefilter scan metadata before orderbooks`
 - `1a6928e` - `feat: show open paper exposure in status`
+- `1a4f294` - merge PR #7 risk-control stack into `main`
 
 ## Current State
 
@@ -38,7 +39,7 @@
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
 - Full test suite passes: `410 passed` with `.venv/bin/pytest -q`.
 - Ruff passes: `All checks passed`.
-- PR #7 is open: `https://github.com/progerjkd/prediction-market-trading-bot/pull/7`.
+- PR #7 is merged: `https://github.com/progerjkd/prediction-market-trading-bot/pull/7`.
 - Paper-run tmux harness is available at `scripts/paper-daemon`; runbook is `docs/RUNBOOK.md`.
 - `scripts/paper-daemon status` works, forces `LIVE_TRADING=false`, and reports paper-live metrics, acceptance, open exposure, and recent skip diagnostics.
 - Supervised paper daemon is running in tmux session `pm-bot-paper-live` with:
@@ -70,6 +71,26 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 ```
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
+
+## Current Journal — 2026-04-28 16:45 PDT
+
+- Local branch is `main`, synced to `origin/main` after PR #7 merged.
+- Working tree has only runtime/local artifacts outside tracked source work:
+  - `.claude/skills/pm-compound/references/failure_log.md` modified by runtime postmortem/test activity.
+  - `.claude/worktrees/` untracked.
+  - `data/` untracked runtime DB/log/model data.
+- Do not commit runtime DB/log data. Do not revert the failure log unless explicitly requested.
+- Supervised paper daemon is still running in tmux session `pm-bot-paper-live`.
+- Current paper daemon status:
+  - STOP file absent: `data/PAPER_STOP`.
+  - Open paper positions: `1`.
+  - Open exposure: `$100.00`.
+  - Acceptance gate: not met, needs 50 settled trades and currently has 0.
+  - Recent skip diagnostics: `too_far_to_resolution=718`, `wide_spread=12`, `decision_should_trade_false=6`, `low_volume=3`, `already_open_position=2`.
+- Last verified test/lint state before PR #7 merge:
+  - `.venv/bin/pytest -q` -> `410 passed`.
+  - `.venv/bin/ruff check .` -> clean.
+- Next recommended build: bounded orderbook over-sampling after metadata prefiltering. Continue fetching orderbooks from metadata-valid markets until either `max_markets` tradeable candidates are found or a bounded attempt cap is hit, then keep recording skip diagnostics for `wide_spread` and empty/stale books.
 
 ## Important Context
 
@@ -249,11 +270,10 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 ## Next Highest-Value Work
 
-1. **Merge PR #7** — risk-control stack plus skip diagnostics, metadata prefiltering, and open-exposure status.
+1. **Build bounded orderbook over-sampling** — after metadata prefiltering, keep trying additional metadata-valid markets until the daemon finds up to `max_markets` tradeable candidates or hits a bounded orderbook-attempt cap.
 2. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running and watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`.
-3. **Improve scan fill rate if needed** — if many metadata-valid markets still fail on `wide_spread`, consider bounded orderbook over-sampling so the daemon can fill up to `max_markets` flagged candidates after spread filtering.
-4. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
-5. Keep live trading unreachable in v1.
+3. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
+4. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
 
