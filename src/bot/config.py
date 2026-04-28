@@ -49,6 +49,31 @@ class RuntimeSettings:
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
+    def __post_init__(self) -> None:
+        errors: list[str] = []
+        if not (0.0 < self.edge_threshold < 1.0):
+            errors.append(f"edge_threshold must be in (0, 1), got {self.edge_threshold}")
+        if not (0.0 < self.kelly_fraction <= 1.0):
+            errors.append(f"kelly_fraction must be in (0, 1], got {self.kelly_fraction}")
+        if self.bankroll_usdc <= 0:
+            errors.append(f"bankroll_usdc must be positive, got {self.bankroll_usdc}")
+        if not (0.0 < self.max_position_pct <= 1.0):
+            errors.append(f"max_position_pct must be in (0, 1], got {self.max_position_pct}")
+        if not (0.0 < self.max_exposure_pct <= 1.0):
+            errors.append(f"max_exposure_pct must be in (0, 1], got {self.max_exposure_pct}")
+        if not (0.0 < self.daily_loss_pct <= 1.0):
+            errors.append(f"daily_loss_pct must be in (0, 1], got {self.daily_loss_pct}")
+        if not (0.0 < self.max_drawdown_pct <= 1.0):
+            errors.append(f"max_drawdown_pct must be in (0, 1], got {self.max_drawdown_pct}")
+        if self.scan_max_spread <= 0.0:
+            errors.append(f"scan_max_spread must be positive, got {self.scan_max_spread}")
+        if self.scan_max_days <= 0:
+            errors.append(f"scan_max_days must be positive, got {self.scan_max_days}")
+        if self.scan_interval_seconds < 0:
+            errors.append(f"scan_interval_seconds must be >= 0, got {self.scan_interval_seconds}")
+        if errors:
+            raise ValueError("; ".join(errors))
+
     @property
     def live_trading_enabled(self) -> bool:
         """Live trading is intentionally disabled for the v1 MVP."""
