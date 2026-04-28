@@ -72,9 +72,9 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
-## Current Journal — 2026-04-28 16:45 PDT
+## Current Journal — 2026-04-28 16:55 PDT
 
-- Local branch is `main`, synced to `origin/main` after PR #7 merged.
+- Local branch is `feature/scan-oversampling`, branched from `main` after PR #7 merged.
 - Working tree has only runtime/local artifacts outside tracked source work:
   - `.claude/skills/pm-compound/references/failure_log.md` modified by runtime postmortem/test activity.
   - `.claude/worktrees/` untracked.
@@ -87,10 +87,11 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
   - Open exposure: `$100.00`.
   - Acceptance gate: not met, needs 50 settled trades and currently has 0.
   - Recent skip diagnostics: `too_far_to_resolution=718`, `wide_spread=12`, `decision_should_trade_false=6`, `low_volume=3`, `already_open_position=2`.
-- Last verified test/lint state before PR #7 merge:
-  - `.venv/bin/pytest -q` -> `410 passed`.
+- Last verified test/lint state:
+  - `.venv/bin/pytest -q` -> `411 passed`.
   - `.venv/bin/ruff check .` -> clean.
-- Next recommended build: bounded orderbook over-sampling after metadata prefiltering. Continue fetching orderbooks from metadata-valid markets until either `max_markets` tradeable candidates are found or a bounded attempt cap is hit, then keep recording skip diagnostics for `wide_spread` and empty/stale books.
+  - `.venv/bin/python -m bot.daemon --once --paper --mock-ai --max-markets 1` -> exited 0; runtime DB state caused prediction/trade skip after flagging one mock market.
+- Bounded orderbook over-sampling is implemented on this branch. It keeps fetching orderbooks from metadata-valid markets until either `max_markets` tradeable candidates are found or `max_markets * 3` orderbook attempts are reached, then preserves spread-weighted `edge_proxy` ordering.
 
 ## Important Context
 
@@ -256,6 +257,14 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 - Legacy DB migration adds source columns, backfills `bt_%` trades to `backtest`, and removes stale paper-live metric rows whose counts no longer match paper-live trades.
 - `--status` labels the gate as the paper-live acceptance gate.
 
+### Bounded orderbook over-sampling (feature/scan-oversampling)
+
+- After metadata prefiltering, `run_once()` iterates metadata-valid markets in ranked order and fetches orderbooks one at a time.
+- Loop exits when either `len(flagged) >= max_markets` **or** `orderbook_attempts >= max_markets * 3` (hard cap prevents runaway HTTP calls in a single pass).
+- Wide-spread and unavailable-orderbook markets each record a `skip_event` for diagnostics; scan continues to the next candidate rather than stopping.
+- The `3×` cap multiplier is intentionally internal (not exposed as an env var) — operators who need broader coverage should raise `--max-markets` / `MAX_MARKETS` instead.
+- Tests: `test_far_future_markets_do_not_consume_orderbook_scan_slots` and `test_wide_spread_markets_do_not_stop_scan_before_tradeable_candidates` in `tests/test_scan_metadata_prefilter.py`.
+
 ### Skip diagnostics and scan selection
 
 - `skip_events` records scan, decision, risk, sizing, execution, cooldown, dedup, and position-gate skips.
@@ -270,10 +279,9 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 ## Next Highest-Value Work
 
-1. **Build bounded orderbook over-sampling** — after metadata prefiltering, keep trying additional metadata-valid markets until the daemon finds up to `max_markets` tradeable candidates or hits a bounded orderbook-attempt cap.
-2. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running and watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`.
-3. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
-4. Keep live trading unreachable in v1.
+1. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running and watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`. Bounded oversampling is now live; look for `flagged_markets` per pass to improve above the old ~1–3 range.
+2. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
+3. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
 

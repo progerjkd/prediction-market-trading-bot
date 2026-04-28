@@ -130,8 +130,12 @@ async def run_once(
 
         dedup_cutoff = int(time.time()) - settings.scan_interval_seconds
         seen_ids = await recently_flagged_condition_ids(conn, dedup_cutoff)
-        markets_to_scan: list[Market] = []
+        flagged: list[MarketCandidate] = []
+        orderbook_attempts = 0
+        orderbook_attempt_limit = max(1, max_markets * 3)
         for market in markets_ranked:
+            if len(flagged) >= max_markets or orderbook_attempts >= orderbook_attempt_limit:
+                break
             if market.condition_id in seen_ids:
                 await _record_market_skip(
                     conn,
@@ -150,25 +154,35 @@ async def run_once(
                     detail=_market_detail(market),
                 )
                 continue
-            markets_to_scan.append(market)
-            if len(markets_to_scan) >= max_markets:
-                break
 
-        candidates = await _candidates_from_markets(
-            client, markets_to_scan,
-            book_cache=book_cache,
-            max_cache_age=settings.ws_orderbook_max_age_seconds,
-        )
-        flagged = filter_tradeable_markets(
-            candidates,
-            min_volume=settings.scan_min_volume,
-            max_days_to_resolution=settings.scan_max_days,
-            max_spread=settings.scan_max_spread,
-            min_liquidity=settings.scan_min_liquidity,
-        )
-        flagged_ids = {c.condition_id for c in flagged}
-        for candidate in candidates:
-            if candidate.condition_id not in flagged_ids:
+            orderbook_attempts += 1
+            candidates = await _candidates_from_markets(
+                client,
+                [market],
+                book_cache=book_cache,
+                max_cache_age=settings.ws_orderbook_max_age_seconds,
+            )
+            if not candidates:
+                await _record_market_skip(
+                    conn,
+                    market=market,
+                    stage="orderbook",
+                    reason="orderbook_unavailable",
+                    detail=_market_detail(market),
+                )
+                continue
+
+            accepted = filter_tradeable_markets(
+                candidates,
+                min_volume=settings.scan_min_volume,
+                max_days_to_resolution=settings.scan_max_days,
+                max_spread=settings.scan_max_spread,
+                min_liquidity=settings.scan_min_liquidity,
+            )
+            if accepted:
+                flagged.extend(accepted)
+            else:
+                candidate = candidates[0]
                 await _record_skip(
                     conn,
                     candidate=candidate,
@@ -176,6 +190,7 @@ async def run_once(
                     reason=_scan_filter_reason(candidate, settings),
                     detail=_candidate_detail(candidate),
                 )
+        flagged = sorted(flagged, key=lambda c: c.edge_proxy, reverse=True)[:max_markets]
 
         for candidate in flagged:
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
