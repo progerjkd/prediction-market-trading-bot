@@ -13,13 +13,19 @@
 - `58c1e56` - `feat: daemon hardening — graceful shutdown, heartbeat, STOP-file watcher`
 - `5902177` - `feat: compound/postmortem loop — settle expired paper trades automatically`
 - `7d585b4` - `feat: persist no-fill and partial-fill outcomes with intended_size`
+- `b75333b` - `feat: WebSocket orderbook cache wired into daemon and orchestrator`
+- `6527ded` - `feat: metrics persistence and acceptance gate`
+- `4c2b379` - `feat: retrain automation with deployment guardrails`
+- `79b5266` - `feat: --status dashboard with acceptance gate and recent metrics`
+- `a0365b1` - `fix: use local midnight for metrics day boundaries`
+- `10b2bba` - `feat: live momentum signals from WS price history`
 
 ## Current State
 
 - Repository is initialized at `/Users/roger/workspace/prediction-market-trading-bot`.
 - Python virtual environment is `.venv`, rebuilt with Python 3.12.2.
 - Project dependency setup uses `uv pip install --python .venv/bin/python -e '.[dev]'`.
-- Deterministic tests pass: `162 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
+- Deterministic tests pass: `220 passed, 1 deselected` with `.venv/bin/pytest -m 'not integration'`.
 - Full test suite includes a live WebSocket integration test; it may timeout waiting for a live message.
 - Ruff passes: `All checks passed`.
 - Local paper-mode smoke command works:
@@ -123,11 +129,46 @@ Observed output (2026-04-26):
 - `RunSummary.no_fill_trades` counter.
 - 15 tests in `tests/test_partial_fill.py`.
 
+### WebSocket cache + runtime integration (b75333b)
+
+- `OrderBookSubscriber` + `OrderBookCache` added in `src/bot/polymarket/ws_orderbook.py`.
+- `daemon._run_repeating` starts a background WS subscriber task and a cache consumer task. Passes `book_cache` to every `run_once()` call.
+- `orchestrator._candidates_from_markets` accepts `book_cache`; cache hit skips HTTP `get_orderbook` call.
+- 14 tests in `tests/test_ws_integration.py`.
+
+### Metrics persistence + acceptance gate (6527ded)
+
+- `persist_daily_metrics(conn, date_str)` — queries closed YES/NO trades joined with predictions, computes win_rate/brier/sharpe/drawdown/profit_factor/pnl, upserts to `metrics_daily`. Called at the end of every `run_once()` pass.
+- `acceptance_criteria_met(conn)` — all-time gate: n≥50, win_rate>60%, brier<0.25; returns `(bool, str)`.
+- Timezone fix (a0365b1): uses local midnight instead of UTC midnight for the day boundary so trade timestamps align correctly in all timezones.
+- 15 tests in `tests/test_metrics_persistence.py`.
+
+### Retrain automation (4c2b379)
+
+- `retrain.py` in `.claude/skills/pm-predict/scripts/`: wraps `train_from_dataframe` with three pre/post-train guardrails (row count ≥200, minority class ≥20%, holdout accuracy ≥80%). Model deployed only on full pass; existing model untouched on failure.
+- Writes a sidecar `xgboost.meta.json` with accuracy/n_train/n_rows on success.
+- CLI: `python retrain.py --data data/training_data.csv --model-out data/models/xgboost.json`.
+- 11 tests in `tests/test_retrain.py`.
+
+### --status dashboard (79b5266)
+
+- `python -m bot.daemon --status` prints last 7 days of `metrics_daily` and the live-trading acceptance gate verdict.
+- `recent_daily_metrics(conn, days=7)` added to `repo.py`.
+- 8 tests in `tests/test_status_dashboard.py`.
+
+### Live momentum signals (10b2bba)
+
+- `OrderBookCache` now tracks a 25h rolling mid-price history per token.
+- `cache.momentum(token_id, lookback_seconds)` returns `(current_mid - past_mid) / past_mid` or 0.0.
+- `MarketCandidate` gains `momentum_1h` and `momentum_24h` fields (default 0.0).
+- `_candidates_from_markets` populates momentum from cache; `_predict` passes real values to XGBoost.
+- 10 tests in `tests/test_momentum.py`.
+
 ## Next Highest-Value Work
 
-1. **WebSocket queue runtime integration**: feed live orderbook queue updates into daemon/orchestrator flow instead of only testing the subscriber.
-2. **Retrain automation**: automate weekly model refresh guardrails (fetch → train → deploy only if acceptance criteria pass).
-3. **Metrics + acceptance dashboard**: track win rate, Brier score, drawdown per day so the live-trading gate can be evaluated.
+1. **Narrative score from research** — `narrative_score` is still hardcoded to `0.0` in XGBoost inference. Wire the Claude research brief's bullish/bearish balance into a numeric score (-1.0 to +1.0) and pass it through.
+2. **Scheduled retrain trigger** — add a `--check-retrain` flag that fetches new resolved markets, compares row count to `xgboost.meta.json`, and runs `retrain.py` if 500+ new rows have accumulated.
+3. **WS token subscription update** — `OrderBookSubscriber` starts with `token_ids=[]`. After each scan pass, update the subscriber with the yes_tokens of flagged markets so WS momentum signals populate before the next pass.
 4. Keep live trading unreachable in v1 until paper-trading acceptance criteria are met (50 trades, win rate >60%, Brier <0.25).
 
 ## Retrain Cadence
