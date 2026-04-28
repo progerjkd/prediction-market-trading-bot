@@ -209,6 +209,16 @@ async def net_realized_pnl(conn: aiosqlite.Connection) -> float:
     return float(row[0]) if row else 0.0
 
 
+async def daily_trades_opened(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> int:
+    """Count trades with opened_at >= since_ts (i.e. opened today)."""
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE opened_at >= ? AND source = ?",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def consecutive_losses(conn: aiosqlite.Connection) -> int:
     """Count of the most-recent consecutive closed trades with pnl < 0."""
     cur = await conn.execute(

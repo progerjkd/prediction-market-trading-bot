@@ -53,6 +53,7 @@ class RuntimeSettings:
     ws_orderbook_max_age_seconds: int = 300
     stop_loss_pct: float = 0.0
     max_consecutive_losses: int = 0  # 0 = disabled
+    max_daily_trades: int = 0  # 0 = disabled
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -117,6 +118,7 @@ def load_settings() -> RuntimeSettings:
         ws_orderbook_max_age_seconds=_env_int("WS_ORDERBOOK_MAX_AGE_SECONDS", 300),
         stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.0),
         max_consecutive_losses=_env_int("MAX_CONSECUTIVE_LOSSES", 0),
+        max_daily_trades=_env_int("MAX_DAILY_TRADES", 0),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )

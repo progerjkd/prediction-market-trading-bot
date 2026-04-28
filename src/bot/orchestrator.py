@@ -32,6 +32,7 @@ from bot.storage.repo import (
     daily_api_cost_usd,
     daily_gain_usd,
     daily_loss_usd,
+    daily_trades_opened,
     fetch_open_trades,
     insert_api_spend,
     insert_flagged_market,
@@ -604,6 +605,10 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
         streak = await consecutive_losses(conn)
         if streak >= settings.max_consecutive_losses:
             return f"consecutive loss streak {streak} >= limit {settings.max_consecutive_losses}"
+    if settings.max_daily_trades > 0:
+        opened_today = await daily_trades_opened(conn, day_start)
+        if opened_today >= settings.max_daily_trades:
+            return f"daily trades {opened_today} >= limit {settings.max_daily_trades}"
     return None
 
 
