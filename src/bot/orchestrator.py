@@ -453,8 +453,30 @@ async def _settle_expired_trades(
     now = int(time.time())
     settled = 0
     timeout_cutoff = now - (settings.position_timeout_days if settings else 30) * 86_400
+    stop_pct = settings.stop_loss_pct if settings else 0.0
 
     for record in open_trades:
+        # Stop-loss sweep — check non-expired trades too
+        if stop_pct > 0.0 and record.fill_price:
+            stop_threshold = record.fill_price * (1.0 - stop_pct)
+            try:
+                book = await client.get_orderbook(record.token_id)
+                current_mid = book.mid
+            except Exception:
+                current_mid = None
+            if current_mid is not None and current_mid < stop_threshold:
+                pnl = (current_mid - record.fill_price) * record.size
+                await close_trade(conn, record.trade_id, pnl=pnl, outcome="STOP_LOSS")
+                await insert_lesson(
+                    conn,
+                    Lesson(trade_id=record.trade_id, cause="stop_loss", rule_proposed="stop_loss",
+                           notes=f"price {current_mid:.4f} below stop {stop_threshold:.4f}"),
+                )
+                log.info("stop-loss closed trade %d: mid=%.4f stop=%.4f pnl=%.2f",
+                         record.trade_id, current_mid, stop_threshold, pnl)
+                settled += 1
+                continue
+
         if record.end_date_iso and not _is_expired(record.end_date_iso, now):
             continue
 

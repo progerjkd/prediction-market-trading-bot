@@ -51,6 +51,7 @@ class RuntimeSettings:
     scan_fetch_limit: int = 50
     position_timeout_days: int = 30
     ws_orderbook_max_age_seconds: int = 300
+    stop_loss_pct: float = 0.0
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -113,6 +114,7 @@ def load_settings() -> RuntimeSettings:
         scan_fetch_limit=_env_int("SCAN_FETCH_LIMIT", 50),
         position_timeout_days=_env_int("POSITION_TIMEOUT_DAYS", 30),
         ws_orderbook_max_age_seconds=_env_int("WS_ORDERBOOK_MAX_AGE_SECONDS", 300),
+        stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.0),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )

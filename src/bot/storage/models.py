@@ -113,6 +113,7 @@ class Lesson:
 class OpenTradeRecord:
     trade_id: int
     condition_id: str
+    token_id: str
     fill_price: float | None
     size: float
     slippage: float | None

@@ -207,6 +207,7 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
         SELECT
             t.id,
             t.condition_id,
+            t.token_id,
             t.fill_price,
             t.size,
             t.slippage,
@@ -223,7 +224,13 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
         (source,),
     )
     rows = await cur.fetchall()
-    return [OpenTradeRecord(trade_id=r[0], condition_id=r[1], fill_price=r[2], size=r[3], slippage=r[4], end_date_iso=r[5]) for r in rows]
+    return [
+        OpenTradeRecord(
+            trade_id=r[0], condition_id=r[1], token_id=r[2],
+            fill_price=r[3], size=r[4], slippage=r[5], end_date_iso=r[6],
+        )
+        for r in rows
+    ]
 
 
 async def insert_lesson(conn: aiosqlite.Connection, lesson: Lesson) -> int:
