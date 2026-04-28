@@ -114,20 +114,24 @@ class OrderBookSubscriber:
         self.url = url or os.environ.get("WS_HOST", DEFAULT_WS)
         self.max_backoff = max_backoff
         self._stop = asyncio.Event()
+        self._reconnect = asyncio.Event()
 
     def stop(self) -> None:
         self._stop.set()
 
     def update_tokens(self, token_ids: list[str]) -> None:
-        """Replace the subscribed token list (deduped). Takes effect on next reconnect."""
-        self.token_ids = list(dict.fromkeys(token_ids))
+        """Replace the subscribed token list (deduped). Triggers reconnect if list changed."""
+        new = list(dict.fromkeys(token_ids))
+        if new != self.token_ids:
+            self.token_ids = new
+            self._reconnect.set()
 
     async def run(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
             try:
                 await self._connect_and_stream()
-                backoff = 1.0  # reset on clean disconnect
+                backoff = 1.0  # reset on clean disconnect or reconnect request
             except (TimeoutError, ConnectionClosed, WebSocketException, OSError) as e:
                 log.warning("ws disconnect: %s; reconnecting in %.1fs", e, backoff)
                 await asyncio.sleep(backoff)
@@ -144,7 +148,14 @@ class OrderBookSubscriber:
             log.info("ws subscribed to %d tokens", len(self.token_ids))
 
             while not self._stop.is_set():
-                msg = await ws.recv()
+                if self._reconnect.is_set():
+                    self._reconnect.clear()
+                    log.info("ws reconnecting with %d updated tokens", len(self.token_ids))
+                    return  # exit cleanly; run() will reconnect immediately
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                except TimeoutError:
+                    continue
                 if isinstance(msg, bytes):
                     msg = msg.decode("utf-8", errors="replace")
                 try:

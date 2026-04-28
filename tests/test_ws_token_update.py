@@ -4,12 +4,9 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from bot.config import RuntimeSettings
 from bot.orchestrator import RunSummary
-from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber
-from bot.storage.db import open_db
+from bot.polymarket.ws_orderbook import OrderBookSubscriber
 
 
 def _fake_summary(flagged_tokens: list[str] | None = None, halt_reason: str | None = None):
@@ -28,7 +25,6 @@ async def _run_with_patches(tmp_path, *, flagged_tokens=None, summaries=None):
     conn.close = AsyncMock()
     shutdown = _DaemonShutdown()
 
-    call_count = 0
     captured_subscriber = None
 
     async def fake_subscriber_run():

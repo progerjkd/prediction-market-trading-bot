@@ -97,7 +97,6 @@ def test_momentum_prunes_entries_older_than_25h():
 
 
 async def test_candidates_populate_momentum_from_cache():
-    from datetime import UTC, datetime, timedelta
 
     from bot.orchestrator import _candidates_from_markets
     from bot.polymarket.client import Market
@@ -126,7 +125,6 @@ async def test_candidates_populate_momentum_from_cache():
 
 
 async def test_candidates_momentum_zero_when_only_one_cache_entry():
-    from datetime import UTC, datetime, timedelta
 
     from bot.orchestrator import _candidates_from_markets
     from bot.polymarket.client import Market
@@ -149,7 +147,6 @@ async def test_candidates_momentum_zero_when_only_one_cache_entry():
 
 
 async def test_candidates_momentum_zero_when_no_cache():
-    from datetime import UTC, datetime, timedelta
 
     from bot.orchestrator import _candidates_from_markets
     from bot.polymarket.client import Market, OrderBookSnapshot

@@ -1,9 +1,6 @@
 """Tests for --status dashboard CLI mode — TDD RED phase."""
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from bot.storage.db import open_db
@@ -15,7 +12,6 @@ from bot.storage.repo import (
     persist_daily_metrics,
     recent_daily_metrics,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

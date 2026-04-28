@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from bot.claude.client import ClaudeForecastClient, ForecastResult, cost_usd_from_usage
+from bot.claude.client import ClaudeForecastClient, cost_usd_from_usage
 from bot.storage.db import open_db
-from bot.storage.repo import daily_api_cost_usd, insert_api_spend
-from bot.storage.models import ApiSpend
-
+from bot.storage.repo import daily_api_cost_usd
 
 # ---------------------------------------------------------------------------
 # cost_usd_from_usage

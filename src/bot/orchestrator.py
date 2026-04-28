@@ -135,7 +135,7 @@ async def run_once(
                 conn,
                 ApiSpend(
                     provider="anthropic",
-                    model=forecaster.model if not mock_ai else "mock",
+                    model=str(forecaster.model) if not mock_ai else "mock",
                     cost_usd=decision.components.get("forecast_cost_usd", 0.0),
                 ),
             )

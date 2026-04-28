@@ -1,12 +1,10 @@
 """Narrative score wiring from Claude reasoning — TDD RED phase."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from sentiment import lexical_sentiment_score
-
 
 # ---------------------------------------------------------------------------
 # lexical_sentiment_score (existing function — verify contract)
@@ -52,7 +50,6 @@ async def test_predict_passes_narrative_score_from_claude_reasoning(tmp_path):
     from bot.config import RuntimeSettings
     from bot.polymarket.client import Market, MarketResolution, OrderBookSnapshot
     from bot.storage.db import open_db
-    from bot.storage.repo import insert_prediction
 
     conn = await open_db(tmp_path / "bot.sqlite")
     settings = RuntimeSettings(stop_file=tmp_path / "STOP", bankroll_usdc=10_000, edge_threshold=0.04)
