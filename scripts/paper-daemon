@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SESSION="${PM_BOT_TMUX_SESSION:-pm-bot}"
+DB_PATH="${BOT_DB_PATH:-data/bot.sqlite}"
+STOP_FILE="${STOP_FILE:-data/STOP}"
+LOG_FILE="${PM_BOT_LOG_FILE:-data/logs/paper-daemon.log}"
+MAX_MARKETS="${MAX_MARKETS:-10}"
+STATUS_INTERVAL_SECONDS="${STATUS_INTERVAL_SECONDS:-300}"
+
+cd "$ROOT"
+
+usage() {
+  cat <<EOF
+Usage: scripts/paper-daemon <command>
+
+Commands:
+  start       Start paper daemon in a tmux session with daemon/logs/status panes
+  stop        Request graceful shutdown by creating the STOP file
+  close       Close the tmux session panes after shutdown
+  status      Show tmux session state and bot acceptance status
+  logs        Tail the paper daemon log
+  attach      Attach to the tmux session
+  clear-stop  Remove the STOP file after you have confirmed the daemon is stopped
+
+Environment:
+  PM_BOT_TMUX_SESSION       tmux session name (default: pm-bot)
+  BOT_DB_PATH               SQLite DB path (default: data/bot.sqlite)
+  STOP_FILE                 daemon STOP file path (default: data/STOP)
+  PM_BOT_LOG_FILE           log path (default: data/logs/paper-daemon.log)
+  MAX_MARKETS               daemon max markets per pass (default: 10)
+  STATUS_INTERVAL_SECONDS   status pane refresh interval (default: 300)
+EOF
+}
+
+require_tmux() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux is required for this harness" >&2
+    exit 1
+  fi
+}
+
+require_venv() {
+  if [[ ! -x ".venv/bin/python" ]]; then
+    echo ".venv/bin/python not found. Run the project setup first." >&2
+    exit 1
+  fi
+}
+
+session_exists() {
+  tmux has-session -t "$SESSION" 2>/dev/null
+}
+
+daemon_command() {
+  printf 'cd %q && mkdir -p %q && LIVE_TRADING=false BOT_DB_PATH=%q STOP_FILE=%q .venv/bin/python -m bot.daemon --paper --max-markets %q 2>&1 | tee -a %q' \
+    "$ROOT" "$(dirname "$LOG_FILE")" "$DB_PATH" "$STOP_FILE" "$MAX_MARKETS" "$LOG_FILE"
+}
+
+status_command() {
+  printf 'cd %q && while true; do clear; date; LIVE_TRADING=false BOT_DB_PATH=%q STOP_FILE=%q .venv/bin/python -m bot.daemon --paper --status; sleep %q; done' \
+    "$ROOT" "$DB_PATH" "$STOP_FILE" "$STATUS_INTERVAL_SECONDS"
+}
+
+start() {
+  require_tmux
+  require_venv
+  mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$DB_PATH")" "$(dirname "$STOP_FILE")"
+
+  if [[ -e "$STOP_FILE" ]]; then
+    echo "Refusing to start: STOP file exists at $STOP_FILE" >&2
+    echo "Remove it with: scripts/paper-daemon clear-stop" >&2
+    exit 1
+  fi
+
+  if session_exists; then
+    echo "tmux session already exists: $SESSION"
+    echo "Attach with: scripts/paper-daemon attach"
+    exit 0
+  fi
+
+  tmux new-session -d -s "$SESSION" -n paper
+  tmux send-keys -t "$SESSION:paper.0" "$(daemon_command)" C-m
+  tmux split-window -h -t "$SESSION:paper.0"
+  tmux send-keys -t "$SESSION:paper.1" "cd \"$ROOT\" && mkdir -p \"$(dirname "$LOG_FILE")\" && touch \"$LOG_FILE\" && tail -n 80 -f \"$LOG_FILE\"" C-m
+  tmux split-window -v -t "$SESSION:paper.1"
+  tmux send-keys -t "$SESSION:paper.2" "$(status_command)" C-m
+  tmux select-layout -t "$SESSION:paper" main-vertical
+  tmux select-pane -t "$SESSION:paper.0"
+
+  echo "Started paper daemon tmux session: $SESSION"
+  echo "Attach with: scripts/paper-daemon attach"
+}
+
+stop() {
+  mkdir -p "$(dirname "$STOP_FILE")"
+  touch "$STOP_FILE"
+  echo "STOP file created at $STOP_FILE"
+  echo "The daemon will finish the current pass and shut down gracefully."
+  echo "After shutdown, close panes with: scripts/paper-daemon close"
+}
+
+close() {
+  require_tmux
+  if session_exists; then
+    tmux kill-session -t "$SESSION"
+    echo "Closed tmux session: $SESSION"
+  else
+    echo "tmux session not found: $SESSION"
+  fi
+}
+
+status() {
+  require_venv
+  if command -v tmux >/dev/null 2>&1 && session_exists; then
+    echo "tmux session: running ($SESSION)"
+  else
+    echo "tmux session: not running ($SESSION)"
+  fi
+  if [[ -e "$STOP_FILE" ]]; then
+    echo "STOP file: present ($STOP_FILE)"
+  else
+    echo "STOP file: absent ($STOP_FILE)"
+  fi
+  LIVE_TRADING=false BOT_DB_PATH="$DB_PATH" STOP_FILE="$STOP_FILE" .venv/bin/python -m bot.daemon --paper --status
+}
+
+logs() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  touch "$LOG_FILE"
+  tail -n 120 -f "$LOG_FILE"
+}
+
+attach() {
+  require_tmux
+  if ! session_exists; then
+    echo "tmux session not found: $SESSION" >&2
+    exit 1
+  fi
+  tmux attach -t "$SESSION"
+}
+
+clear_stop() {
+  rm -f "$STOP_FILE"
+  echo "Removed STOP file: $STOP_FILE"
+}
+
+command="${1:-}"
+case "$command" in
+  start) start ;;
+  stop) stop ;;
+  close) close ;;
+  status) status ;;
+  logs) logs ;;
+  attach) attach ;;
+  clear-stop) clear_stop ;;
+  -h|--help|help|"") usage ;;
+  *)
+    echo "Unknown command: $command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

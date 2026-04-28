@@ -71,6 +71,7 @@ class Trade:
     prediction_id: int | None = None
     fill_price: float | None = None
     slippage: float | None = None
+    intended_size: float | None = None
     opened_at: int = field(default_factory=lambda: int(time.time()))
     closed_at: int | None = None
     pnl: float | None = None
@@ -105,6 +106,16 @@ class Lesson:
     notes: str = ""
     created_at: int = field(default_factory=lambda: int(time.time()))
     id: int | None = None
+
+
+@dataclass
+class OpenTradeRecord:
+    trade_id: int
+    condition_id: str
+    fill_price: float | None
+    size: float
+    slippage: float | None
+    end_date_iso: str | None
 
 
 @dataclass

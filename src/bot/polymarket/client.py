@@ -16,8 +16,15 @@ import httpx
 
 DEFAULT_HOST = "https://clob.polymarket.com"
 DEFAULT_GAMMA = "https://gamma-api.polymarket.com"
+_RESOLUTION_THRESHOLD = 0.95
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class MarketResolution:
+    resolved: bool
+    final_yes_price: float | None  # 1.0 = YES won, 0.0 = NO won, None = pending
 
 
 @dataclass
@@ -199,6 +206,34 @@ class PolymarketClient:
             bids=bids,
             timestamp=int(data.get("timestamp") or 0),
         )
+
+    async def get_market_resolution(self, condition_id: str) -> MarketResolution:
+        """Query Gamma for a single market's resolution status."""
+        resp = await self._get_with_retry(
+            f"{self.gamma}/markets",
+            params={"conditionId": condition_id, "limit": 1},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        markets = data if isinstance(data, list) else data.get("data") or []
+        if not markets:
+            return MarketResolution(resolved=False, final_yes_price=None)
+        record = markets[0]
+        raw_prices = record.get("outcomePrices")
+        if not raw_prices:
+            return MarketResolution(resolved=False, final_yes_price=None)
+        try:
+            import json as _json
+            prices = _json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+            yes_price = float(prices[0])
+            no_price = float(prices[1])
+        except (ValueError, TypeError, IndexError):
+            return MarketResolution(resolved=False, final_yes_price=None)
+        if yes_price >= _RESOLUTION_THRESHOLD and no_price < (1 - _RESOLUTION_THRESHOLD):
+            return MarketResolution(resolved=True, final_yes_price=yes_price)
+        if no_price >= _RESOLUTION_THRESHOLD and yes_price < (1 - _RESOLUTION_THRESHOLD):
+            return MarketResolution(resolved=True, final_yes_price=yes_price)
+        return MarketResolution(resolved=False, final_yes_price=None)
 
     async def get_midpoint(self, token_id: str) -> float | None:
         resp = await self._get_with_retry(f"{self.host}/midpoint", params={"token_id": token_id})

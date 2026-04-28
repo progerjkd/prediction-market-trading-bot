@@ -4,8 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +13,12 @@ import aiosqlite
 from bot.budgets import BudgetLimits, RuntimeBudgetSnapshot, halt_reason
 from bot.claude.client import ClaudeForecastClient
 from bot.config import RuntimeSettings
-from bot.paper.simulator import Fill, OrderBook, OrderBookLevel, Side, simulate_fill
-from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
-from bot.skills import PROJECT_ROOT, ensure_skill_script_paths
+from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
+from bot.polymarket.client import Market, MarketResolution, OrderBookSnapshot, PolymarketClient
+from bot.polymarket.ws_orderbook import OrderBookCache
+from bot.skills import ensure_skill_script_paths
 from bot.storage.models import (
+    ApiSpend,
     FlaggedMarket,
     Lesson,
     PaperExecution,
@@ -29,14 +30,16 @@ from bot.storage.repo import (
     close_trade,
     daily_api_cost_usd,
     daily_loss_usd,
+    fetch_open_trades,
+    insert_api_spend,
     insert_flagged_market,
     insert_lesson,
     insert_paper_execution,
     insert_prediction,
     insert_research_brief,
     insert_trade,
-    open_paper_trades,
     open_positions_count,
+    persist_daily_metrics,
     total_open_exposure,
 )
 
@@ -51,12 +54,15 @@ from filter_markets import (  # noqa: E402
 from filter_markets import days_to_resolution as _market_days_remaining  # noqa: E402
 from infer_xgboost import infer_probability as xgb_infer  # noqa: E402
 from kelly_size import kelly_size  # noqa: E402
-from postmortem import classify_trade  # noqa: E402
+from postmortem import append_to_failure_log, classify_trade  # noqa: E402
 from prompt_guard import build_research_prompt  # noqa: E402
+from sentiment import lexical_sentiment_score  # noqa: E402
 from validate_risk import RiskInputs, RiskLimits, validate_risk  # noqa: E402
 
 log = logging.getLogger(__name__)
-FAILURE_LOG_PATH = PROJECT_ROOT / ".claude" / "skills" / "pm-compound" / "references" / "failure_log.md"
+
+
+FAILURE_LOG_PATH = Path(__file__).parent.parent.parent / ".claude/skills/pm-compound/references/failure_log.md"
 
 
 @dataclass(frozen=True)
@@ -65,16 +71,19 @@ class RunSummary:
     flagged_markets: int = 0
     predictions_written: int = 0
     paper_trades_written: int = 0
+    no_fill_trades: int = 0
+    skipped_signals: int = 0
+    trades_settled: int = 0
     closed_positions: int = 0
     lessons_written: int = 0
-    skipped_signals: int = 0
     halt_reason: str | None = None
+    flagged_yes_tokens: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class PaperExecutionResult:
-    trade: Trade | None
+@dataclass
+class _PaperExecutionPlan:
     execution: PaperExecution
+    trade: Trade | None = None
 
 
 async def run_once(
@@ -86,6 +95,7 @@ async def run_once(
     max_markets: int = 10,
     mock_ai: bool = False,
     scan_only: bool = False,
+    book_cache: OrderBookCache | None = None,
 ) -> RunSummary:
     budget_reason = await _current_halt_reason(conn, settings)
     if budget_reason:
@@ -98,17 +108,10 @@ async def run_once(
     )
     forecaster = claude_client or ClaudeForecastClient()
     try:
-        closed_positions, lessons_written = await _compound_closed_positions(conn, client)
-        budget_reason = await _current_halt_reason(conn, settings)
-        if budget_reason:
-            return RunSummary(
-                closed_positions=closed_positions,
-                lessons_written=lessons_written,
-                halt_reason=budget_reason,
-            )
+        settled = await _settle_expired_trades(conn, client)
 
         markets = await client.list_markets(limit=max_markets, active_only=True)
-        candidates = await _candidates_from_markets(client, markets[:max_markets])
+        candidates = await _candidates_from_markets(client, markets[:max_markets], book_cache=book_cache)
         flagged = filter_tradeable_markets(
             candidates,
             min_volume=settings.scan_min_volume,
@@ -124,12 +127,15 @@ async def run_once(
             return RunSummary(
                 scanned_markets=len(markets),
                 flagged_markets=len(flagged),
-                closed_positions=closed_positions,
-                lessons_written=lessons_written,
+                trades_settled=settled,
+                closed_positions=settled,
+                lessons_written=settled,
+                flagged_yes_tokens=[c.yes_token for c in flagged],
             )
 
         predictions_written = 0
         trades_written = 0
+        no_fill_trades = 0
         skipped = 0
         for candidate in flagged:
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
@@ -144,6 +150,14 @@ async def run_once(
                     components=decision.components,
                 ),
             )
+            await insert_api_spend(
+                conn,
+                ApiSpend(
+                    provider="anthropic",
+                    model=str(forecaster.model) if not mock_ai else "mock",
+                    cost_usd=decision.components.get("forecast_cost_usd", 0.0),
+                ),
+            )
             predictions_written += 1
 
             await insert_research_brief(
@@ -152,7 +166,7 @@ async def run_once(
                     condition_id=candidate.condition_id,
                     bullish_signals=["mock-ai edge signal"] if mock_ai else [],
                     bearish_signals=[],
-                    narrative_score=0.0,
+                    narrative_score=decision.components.get("narrative_score", 0.0),
                     sources=["paper-smoke"] if mock_ai else [],
                 ),
             )
@@ -161,7 +175,7 @@ async def run_once(
                 skipped += 1
                 continue
 
-            execution_result = await _paper_execute_if_allowed(
+            execution_plan = await _paper_execute_if_allowed(
                 conn=conn,
                 client=client,
                 settings=settings,
@@ -170,174 +184,61 @@ async def run_once(
                 p_model=decision.p_model,
                 p_market=decision.p_market,
             )
-            if execution_result is None:
+            if execution_plan is None:
                 skipped += 1
-                continue
-
-            if execution_result.trade is None:
-                await insert_paper_execution(conn, execution_result.execution)
+            elif execution_plan.trade is None:
+                await insert_paper_execution(conn, execution_plan.execution)
+                no_fill_trades += 1
                 skipped += 1
             else:
-                trade_id = await insert_trade(conn, execution_result.trade)
-                execution_result.execution.trade_id = trade_id
-                await insert_paper_execution(conn, execution_result.execution)
+                trade_id = await insert_trade(conn, execution_plan.trade)
+                execution_plan.execution.trade_id = trade_id
+                await insert_paper_execution(conn, execution_plan.execution)
                 trades_written += 1
+
+        today = _today_iso()
+        await persist_daily_metrics(conn, today)
 
         return RunSummary(
             scanned_markets=len(markets),
             flagged_markets=len(flagged),
             predictions_written=predictions_written,
             paper_trades_written=trades_written,
-            closed_positions=closed_positions,
-            lessons_written=lessons_written,
+            no_fill_trades=no_fill_trades,
             skipped_signals=skipped,
+            trades_settled=settled,
+            closed_positions=settled,
+            lessons_written=settled,
+            flagged_yes_tokens=[c.yes_token for c in flagged],
         )
     finally:
         if owns_client:
             await client.close()
 
 
-async def _compound_closed_positions(
-    conn: aiosqlite.Connection,
-    client: PolymarketClient | Any,
-    *,
-    failure_log_path: Path | None = None,
-) -> tuple[int, int]:
-    open_trades = await open_paper_trades(conn)
-    if not open_trades:
-        return 0, 0
-
-    markets = await client.list_markets(limit=max(100, len(open_trades)), active_only=False)
-    markets_by_condition = {market.condition_id: market for market in markets}
-    closed_positions = 0
-    lessons_written = 0
-
-    for trade in open_trades:
-        if trade.id is None:
-            continue
-        market = markets_by_condition.get(trade.condition_id)
-        if market is None:
-            continue
-        final_yes_price = _resolved_yes_price(market)
-        if final_yes_price is None:
-            continue
-
-        pnl = _paper_position_pnl(trade, final_yes_price)
-        outcome = "YES" if final_yes_price >= 0.5 else "NO"
-        await close_trade(conn, trade.id, pnl=pnl, outcome=outcome)
-        closed_positions += 1
-
-        if pnl < 0:
-            cause, rule_proposed = classify_trade(pnl, trade.slippage)
-            notes = f"condition_id={trade.condition_id}; outcome={outcome}; pnl={pnl:.2f}"
-            await insert_lesson(
-                conn,
-                Lesson(
-                    trade_id=trade.id,
-                    cause=cause,
-                    rule_proposed=rule_proposed,
-                    notes=notes,
-                ),
-            )
-            _append_failure_log(
-                failure_log_path or FAILURE_LOG_PATH,
-                trade=trade,
-                pnl=pnl,
-                outcome=outcome,
-                cause=cause,
-                rule_proposed=rule_proposed,
-            )
-            lessons_written += 1
-
-    return closed_positions, lessons_written
-
-
-def _resolved_yes_price(market: Market) -> float | None:
-    raw = market.raw
-    outcome_prices = _decode_jsonish(raw.get("outcomePrices"))
-    if isinstance(outcome_prices, list) and outcome_prices:
-        try:
-            return _clamp_probability(float(outcome_prices[0]))
-        except (TypeError, ValueError):
-            pass
-
-    for key in ("final_yes_price", "finalYesPrice", "yesPrice", "resolvedYesPrice"):
-        if raw.get(key) is not None:
-            try:
-                return _clamp_probability(float(raw[key]))
-            except (TypeError, ValueError):
-                pass
-
-    for key in ("resolvedOutcome", "winningOutcome", "winner", "outcome"):
-        outcome = raw.get(key)
-        if isinstance(outcome, str):
-            normalized = outcome.strip().lower()
-            if normalized == "yes":
-                return 1.0
-            if normalized == "no":
-                return 0.0
-
-    return None
-
-
-def _decode_jsonish(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    return value
-
-
-def _clamp_probability(value: float) -> float:
-    return min(1.0, max(0.0, value))
-
-
-def _paper_position_pnl(trade: Trade, final_yes_price: float) -> float:
-    entry_price = trade.fill_price if trade.fill_price is not None else trade.limit_price
-    if trade.side.upper() == "SELL":
-        return (entry_price - final_yes_price) * trade.size
-    return (final_yes_price - entry_price) * trade.size
-
-
-def _append_failure_log(
-    path: Path,
-    *,
-    trade: Trade,
-    pnl: float,
-    outcome: str,
-    cause: str,
-    rule_proposed: str,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC).isoformat()
-    with path.open("a", encoding="utf-8") as f:
-        f.write(
-            f"\n## {timestamp} trade {trade.id}\n"
-            f"- condition_id: {trade.condition_id}\n"
-            f"- outcome: {outcome}\n"
-            f"- pnl: {pnl:.2f}\n"
-            f"- cause: {cause}\n"
-            f"- rule: {rule_proposed}\n"
-        )
-
-
 async def _candidates_from_markets(
     client: PolymarketClient | Any,
     markets: list[Market],
+    book_cache: OrderBookCache | None = None,
 ) -> list[MarketCandidate]:
     candidates: list[MarketCandidate] = []
     for market in markets:
         if market.closed:
             continue
-        try:
-            book = await client.get_orderbook(market.yes_token)
-        except Exception as exc:
-            log.warning("orderbook fetch failed for %s (%s): %s", market.condition_id, market.yes_token[:12], exc)
-            continue
+        cached = book_cache.get(market.yes_token) if book_cache else None
+        if cached is not None:
+            book = cached
+        else:
+            try:
+                book = await client.get_orderbook(market.yes_token)
+            except Exception as exc:
+                log.warning("orderbook fetch failed for %s (%s): %s", market.condition_id, market.yes_token[:12], exc)
+                continue
         if book.mid is None or book.spread is None:
             log.debug("skipping %s: orderbook has no mid/spread", market.condition_id)
             continue
+        momentum_1h = book_cache.momentum(market.yes_token, 3600) if book_cache else 0.0
+        momentum_24h = book_cache.momentum(market.yes_token, 86400) if book_cache else 0.0
         candidates.append(
             MarketCandidate(
                 condition_id=market.condition_id,
@@ -350,6 +251,8 @@ async def _candidates_from_markets(
                 liquidity=market.liquidity,
                 end_date_iso=market.end_date_iso,
                 raw=market.raw,
+                momentum_1h=momentum_1h,
+                momentum_24h=momentum_24h,
             )
         )
     return candidates
@@ -378,6 +281,11 @@ async def _predict(
         claude_probability = forecast.probability
         claude_reason = forecast.reasoning
 
+    narrative_score = lexical_sentiment_score(claude_reason)
+    forecast_cost_usd: float = 0.0
+    if not mock_ai:
+        forecast_cost_usd = forecast.cost_usd
+
     if mock_ai:
         xgboost_probability = min(0.95, candidate.mid_price + 0.12)
         xgb_source = "mock_ai"
@@ -388,9 +296,9 @@ async def _predict(
                 "spread": candidate.spread,
                 "volume_24h": candidate.volume_24h,
                 "days_to_resolution": _market_days_remaining(candidate.end_date_iso),
-                "narrative_score": 0.0,
-                "momentum_1h": 0.0,
-                "momentum_24h": 0.0,
+                "narrative_score": narrative_score,
+                "momentum_1h": candidate.momentum_1h,
+                "momentum_24h": candidate.momentum_24h,
             },
             model_path=settings.xgboost_model_path,
         )
@@ -406,6 +314,8 @@ async def _predict(
     components["claude_reason"] = claude_reason
     components["research_prompt"] = research_prompt
     components["xgb_source"] = xgb_source
+    components["narrative_score"] = narrative_score
+    components["forecast_cost_usd"] = forecast_cost_usd
     return type(decision)(
         condition_id=decision.condition_id,
         token_id=decision.token_id,
@@ -428,7 +338,7 @@ async def _paper_execute_if_allowed(
     prediction_id: int,
     p_model: float,
     p_market: float,
-) -> PaperExecutionResult | None:
+) -> _PaperExecutionPlan | None:
     size_usd = _proposed_size_usd(p_model=p_model, p_market=p_market, settings=settings)
     if size_usd <= 0:
         return None
@@ -468,6 +378,10 @@ async def _paper_execute_if_allowed(
     limit_price = min(0.99, max(candidate.mid_price, (book.best_ask or candidate.mid_price)))
     shares = size_usd / limit_price
     fill = simulate_fill(orderbook, side=Side.BUY, size=shares, limit_price=limit_price)
+    now = int(time.time())
+    status = "FULL_FILL"
+    if fill.unfilled_size > 0:
+        status = "PARTIAL_FILL"
     execution = PaperExecution(
         condition_id=candidate.condition_id,
         token_id=candidate.yes_token,
@@ -477,27 +391,127 @@ async def _paper_execute_if_allowed(
         unfilled_size=fill.unfilled_size,
         limit_price=limit_price,
         fill_price=fill.avg_price if fill.filled_size > 0 else None,
+        slippage=fill.slippage if fill.filled_size > 0 else None,
+        status=status if fill.filled_size > 0 else "NO_FILL",
+        is_paper=True,
+        prediction_id=prediction_id,
+        created_at=now,
+    )
+    if fill.filled_size <= 0:
+        return _PaperExecutionPlan(execution=execution)
+    trade = Trade(
+        condition_id=candidate.condition_id,
+        token_id=candidate.yes_token,
+        side="BUY",
+        size=fill.filled_size,
+        limit_price=limit_price,
+        fill_price=fill.avg_price,
         slippage=fill.slippage,
-        status=_fill_status(fill),
+        intended_size=shares,
         is_paper=True,
         prediction_id=prediction_id,
     )
-    if fill.filled_size <= 0:
-        return PaperExecutionResult(trade=None, execution=execution)
-    return PaperExecutionResult(
-        trade=Trade(
-            condition_id=candidate.condition_id,
-            token_id=candidate.yes_token,
-            side="BUY",
-            size=fill.filled_size,
-            limit_price=limit_price,
-            fill_price=fill.avg_price,
-            slippage=fill.slippage,
-            is_paper=True,
-            prediction_id=prediction_id,
-        ),
-        execution=execution,
-    )
+    return _PaperExecutionPlan(execution=execution, trade=trade)
+
+
+async def _settle_expired_trades(
+    conn: aiosqlite.Connection,
+    client: Any,
+    *,
+    failure_log_path: Path | None = None,
+) -> int:
+    """Close paper trades whose markets have resolved; run postmortem on each."""
+    log_path = failure_log_path or FAILURE_LOG_PATH
+    open_trades = await fetch_open_trades(conn)
+    now = int(time.time())
+    settled = 0
+
+    for record in open_trades:
+        if record.end_date_iso and not _is_expired(record.end_date_iso, now):
+            continue
+
+        try:
+            resolution = await _get_market_resolution(client, record.condition_id)
+        except Exception as exc:
+            log.warning("resolution check failed for %s: %s", record.condition_id, exc)
+            continue
+
+        if not resolution.resolved:
+            continue
+
+        final_price = resolution.final_yes_price if resolution.final_yes_price is not None else 0.0
+        fill = record.fill_price or 0.0
+        pnl = (final_price - fill) * record.size
+        outcome = "YES" if final_price >= 0.5 else "NO"
+
+        await close_trade(conn, record.trade_id, pnl=pnl, outcome=outcome)
+
+        cause, rule = classify_trade(pnl, record.slippage)
+        await insert_lesson(
+            conn,
+            Lesson(trade_id=record.trade_id, cause=cause, rule_proposed=rule, notes=f"auto-settled; outcome={outcome}"),
+        )
+        log.info(
+            "settled trade %d: %s pnl=%.2f cause=%s",
+            record.trade_id, outcome, pnl, cause,
+        )
+
+        try:
+            append_to_failure_log(
+                log_path=log_path,
+                condition_id=record.condition_id,
+                trade_id=record.trade_id,
+                outcome=outcome,
+                pnl=pnl,
+                cause=cause,
+                rule_proposed=rule,
+            )
+        except Exception as exc:
+            log.warning("failed to append failure log for trade %d: %s", record.trade_id, exc)
+
+        settled += 1
+
+    return settled
+
+
+async def _get_market_resolution(client: Any, condition_id: str) -> MarketResolution:
+    resolver = getattr(client, "get_market_resolution", None)
+    if callable(resolver):
+        return await resolver(condition_id)
+
+    markets = await client.list_markets(limit=100, active_only=False)
+    for market in markets:
+        if market.condition_id == condition_id:
+            return _resolution_from_market_raw(market.raw)
+    return MarketResolution(resolved=False, final_yes_price=None)
+
+
+def _resolution_from_market_raw(raw: dict[str, Any]) -> MarketResolution:
+    raw_prices = raw.get("outcomePrices")
+    if not raw_prices:
+        return MarketResolution(resolved=False, final_yes_price=None)
+    try:
+        prices = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+        yes_price = float(prices[0])
+        no_price = float(prices[1])
+    except (ValueError, TypeError, IndexError):
+        return MarketResolution(resolved=False, final_yes_price=None)
+    if yes_price >= 0.95 and no_price < 0.05:
+        return MarketResolution(resolved=True, final_yes_price=yes_price)
+    if no_price >= 0.95 and yes_price < 0.05:
+        return MarketResolution(resolved=True, final_yes_price=yes_price)
+    return MarketResolution(resolved=False, final_yes_price=None)
+
+
+def _is_expired(end_date_iso: str | None, now: int) -> bool:
+    if not end_date_iso:
+        return False
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
+        return dt.timestamp() < now
+    except (ValueError, TypeError):
+        return False
 
 
 async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSettings) -> str | None:
@@ -542,13 +556,10 @@ def _to_paper_orderbook(book: OrderBookSnapshot) -> OrderBook:
     )
 
 
-def _fill_status(fill: Fill) -> str:
-    if fill.filled_size <= 0:
-        return "NO_FILL"
-    if fill.unfilled_size > 0:
-        return "PARTIAL_FILL"
-    return "FULL_FILL"
-
-
 def summary_to_json(summary: RunSummary) -> str:
     return json.dumps(summary.__dict__, sort_keys=True)
+
+
+def _today_iso() -> str:
+    from datetime import date
+    return date.today().isoformat()

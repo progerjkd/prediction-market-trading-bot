@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import time
+from datetime import date, datetime
 
 import aiosqlite
+
+from bot.metrics import brier_score, max_drawdown, profit_factor, sharpe_ratio, win_rate
 
 from .models import (
     ApiSpend,
     FlaggedMarket,
     Lesson,
+    OpenTradeRecord,
     PaperExecution,
     Prediction,
     ResearchBrief,
@@ -81,44 +85,17 @@ async def insert_trade(conn: aiosqlite.Connection, t: Trade) -> int:
     cur = await conn.execute(
         "INSERT INTO trades "
         "(prediction_id, condition_id, token_id, side, size, limit_price, fill_price, "
-        " slippage, is_paper, opened_at, closed_at, pnl, outcome) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " slippage, intended_size, is_paper, opened_at, closed_at, pnl, outcome) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             t.prediction_id, t.condition_id, t.token_id, t.side, t.size, t.limit_price,
-            t.fill_price, t.slippage, int(t.is_paper), t.opened_at, t.closed_at, t.pnl, t.outcome,
+            t.fill_price, t.slippage, t.intended_size, int(t.is_paper), t.opened_at,
+            t.closed_at, t.pnl, t.outcome,
         ),
     )
     await conn.commit()
     t.id = cur.lastrowid
     return cur.lastrowid
-
-
-async def open_paper_trades(conn: aiosqlite.Connection) -> list[Trade]:
-    cur = await conn.execute(
-        "SELECT id, prediction_id, condition_id, token_id, side, size, limit_price, "
-        "       fill_price, slippage, is_paper, opened_at, closed_at, pnl, outcome "
-        "FROM trades WHERE closed_at IS NULL AND is_paper = 1 ORDER BY opened_at ASC"
-    )
-    rows = await cur.fetchall()
-    return [
-        Trade(
-            id=row[0],
-            prediction_id=row[1],
-            condition_id=row[2],
-            token_id=row[3],
-            side=row[4],
-            size=row[5],
-            limit_price=row[6],
-            fill_price=row[7],
-            slippage=row[8],
-            is_paper=bool(row[9]),
-            opened_at=row[10],
-            closed_at=row[11],
-            pnl=row[12],
-            outcome=row[13],
-        )
-        for row in rows
-    ]
 
 
 async def insert_paper_execution(conn: aiosqlite.Connection, e: PaperExecution) -> int:
@@ -189,6 +166,31 @@ async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int) -> float:
     return float(row[0]) if row else 0.0
 
 
+async def fetch_open_trades(conn: aiosqlite.Connection) -> list[OpenTradeRecord]:
+    """Return all open (unclosed) paper trades with their market end_date_iso."""
+    cur = await conn.execute(
+        """
+        SELECT
+            t.id,
+            t.condition_id,
+            t.fill_price,
+            t.size,
+            t.slippage,
+            (
+                SELECT mf.end_date_iso
+                FROM markets_flagged mf
+                WHERE mf.condition_id = t.condition_id
+                ORDER BY mf.flagged_at DESC
+                LIMIT 1
+            ) AS end_date_iso
+        FROM trades t
+        WHERE t.closed_at IS NULL
+        """
+    )
+    rows = await cur.fetchall()
+    return [OpenTradeRecord(trade_id=r[0], condition_id=r[1], fill_price=r[2], size=r[3], slippage=r[4], end_date_iso=r[5]) for r in rows]
+
+
 async def insert_lesson(conn: aiosqlite.Connection, lesson: Lesson) -> int:
     cur = await conn.execute(
         "INSERT INTO lessons (trade_id, cause, rule_proposed, notes, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -216,6 +218,108 @@ async def daily_api_cost_usd(conn: aiosqlite.Connection, since_ts: int) -> float
     )
     row = await cur.fetchone()
     return float(row[0]) if row else 0.0
+
+
+async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> None:
+    """Compute and upsert metrics for date_str (ISO format: '2026-04-27') into metrics_daily."""
+    d = date.fromisoformat(date_str)
+    # Use local midnight so trade timestamps (which use time.time()) align with the date window
+    day_start = int(datetime(d.year, d.month, d.day).timestamp())
+    day_end = day_start + 86_400
+
+    cur = await conn.execute(
+        """
+        SELECT t.pnl, p.p_model, t.outcome
+        FROM trades t
+        LEFT JOIN predictions p ON t.prediction_id = p.id
+        WHERE t.closed_at >= ? AND t.closed_at < ?
+          AND t.outcome IN ('YES', 'NO')
+          AND t.is_paper = 1
+        """,
+        (day_start, day_end),
+    )
+    rows = await cur.fetchall()
+
+    pnls = [float(r[0]) for r in rows if r[0] is not None]
+    predicted = [float(r[1]) for r in rows if r[1] is not None]
+    actual = [1 if r[2] == "YES" else 0 for r in rows if r[1] is not None]
+
+    n_trades = len(rows)
+    wr = win_rate(pnls)
+    bs = brier_score(predicted, actual)
+    pnl_total = sum(pnls)
+    sr = sharpe_ratio(pnls)
+    equity = []
+    running = 0.0
+    for p in pnls:
+        running += p
+        equity.append(running)
+    dd = max_drawdown(equity)
+    pf = profit_factor(pnls)
+    api_cost = await daily_api_cost_usd(conn, day_start)
+
+    await conn.execute(
+        """
+        INSERT INTO metrics_daily
+            (date, win_rate, sharpe, max_drawdown, profit_factor, brier_score, n_trades, pnl_usd, api_cost_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+            win_rate=excluded.win_rate, sharpe=excluded.sharpe, max_drawdown=excluded.max_drawdown,
+            profit_factor=excluded.profit_factor, brier_score=excluded.brier_score,
+            n_trades=excluded.n_trades, pnl_usd=excluded.pnl_usd, api_cost_usd=excluded.api_cost_usd
+        """,
+        (date_str, wr, sr, dd, pf, bs, n_trades, pnl_total, api_cost),
+    )
+    await conn.commit()
+
+
+async def acceptance_criteria_met(conn: aiosqlite.Connection) -> tuple[bool, str]:
+    """Check if all-time paper trading meets the live-trading gate (50 trades, >60% win, Brier <0.25)."""
+    cur = await conn.execute(
+        """
+        SELECT t.pnl, p.p_model, t.outcome
+        FROM trades t
+        LEFT JOIN predictions p ON t.prediction_id = p.id
+        WHERE t.outcome IN ('YES', 'NO') AND t.is_paper = 1
+        """
+    )
+    rows = await cur.fetchall()
+
+    n = len(rows)
+    if n < 50:
+        return False, f"need 50 settled trades, have {n}"
+
+    pnls = [float(r[0]) for r in rows if r[0] is not None]
+    wr = win_rate(pnls)
+    if wr <= 0.60:
+        return False, f"win rate {wr:.1%} must exceed 60%"
+
+    predicted = [float(r[1]) for r in rows if r[1] is not None]
+    actual = [1 if r[2] == "YES" else 0 for r in rows if r[1] is not None]
+    bs = brier_score(predicted, actual)
+    if bs >= 0.25:
+        return False, f"Brier score {bs:.3f} must be below 0.25"
+
+    return True, ""
+
+
+async def recent_daily_metrics(conn: aiosqlite.Connection, days: int = 7) -> list[dict]:
+    """Return the most recent `days` rows from metrics_daily, newest first."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
+    cur = await conn.execute(
+        "SELECT date, win_rate, brier_score, n_trades, pnl_usd, sharpe, api_cost_usd "
+        "FROM metrics_daily WHERE date >= ? ORDER BY date DESC",
+        (cutoff,),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "date": r[0], "win_rate": r[1], "brier_score": r[2],
+            "n_trades": r[3], "pnl_usd": r[4], "sharpe": r[5], "api_cost_usd": r[6],
+        }
+        for r in rows
+    ]
 
 
 async def insert_book_snapshot(
