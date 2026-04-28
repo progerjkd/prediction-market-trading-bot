@@ -48,6 +48,7 @@ from bot.storage.repo import (
     open_condition_ids,
     open_positions_count,
     persist_daily_metrics,
+    recent_win_rate,
     recently_flagged_condition_ids,
     total_open_exposure,
 )
@@ -385,7 +386,8 @@ async def _paper_execute_if_allowed(
     p_market: float,
 ) -> _PaperExecutionPlan | None:
     bankroll = await effective_bankroll_usd(conn, base_bankroll=settings.bankroll_usdc)
-    size_usd = _proposed_size_usd_with_bankroll(p_model=p_model, p_market=p_market, settings=settings, bankroll=bankroll)
+    kelly_fraction = await _adaptive_kelly_fraction(conn, settings)
+    size_usd = _proposed_size_usd_with_bankroll(p_model=p_model, p_market=p_market, settings=settings, bankroll=bankroll, kelly_fraction=kelly_fraction)
     if size_usd <= 0:
         return None
 
@@ -632,6 +634,18 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
     return None
 
 
+async def _adaptive_kelly_fraction(conn: aiosqlite.Connection, settings: RuntimeSettings) -> float:
+    """Return the effective kelly_fraction, scaled down when recent win rate is below threshold."""
+    if settings.adaptive_kelly_min_win_rate <= 0.0:
+        return settings.kelly_fraction
+    wr = await recent_win_rate(conn, settings.adaptive_kelly_lookback_n)
+    if wr is None:
+        return settings.kelly_fraction
+    if wr < settings.adaptive_kelly_min_win_rate:
+        return settings.kelly_fraction * settings.adaptive_kelly_scale_factor
+    return settings.kelly_fraction
+
+
 def _proposed_size_usd(*, p_model: float, p_market: float, settings: RuntimeSettings) -> float:
     return _proposed_size_usd_with_bankroll(
         p_model=p_model, p_market=p_market, settings=settings, bankroll=settings.bankroll_usdc
@@ -639,13 +653,14 @@ def _proposed_size_usd(*, p_model: float, p_market: float, settings: RuntimeSett
 
 
 def _proposed_size_usd_with_bankroll(
-    *, p_model: float, p_market: float, settings: RuntimeSettings, bankroll: float
+    *, p_model: float, p_market: float, settings: RuntimeSettings, bankroll: float, kelly_fraction: float | None = None
 ) -> float:
+    fraction = kelly_fraction if kelly_fraction is not None else settings.kelly_fraction
     kelly_cap = kelly_size(
         p=p_model,
         b=_net_odds_from_price(p_market),
         bankroll=bankroll,
-        fraction=settings.kelly_fraction,
+        fraction=fraction,
     )
     position_cap = settings.max_position_pct * bankroll
     return min(100.0, kelly_cap, position_cap)

@@ -58,6 +58,9 @@ class RuntimeSettings:
     min_model_prob: float = 0.0  # 0.0 = disabled (no lower bound)
     max_model_prob: float = 1.0  # 1.0 = disabled (no upper bound)
     max_daily_slippage_usd: float = 0.0  # 0.0 = disabled
+    adaptive_kelly_min_win_rate: float = 0.0  # 0.0 = disabled
+    adaptive_kelly_lookback_n: int = 20
+    adaptive_kelly_scale_factor: float = 0.5
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -127,6 +130,9 @@ def load_settings() -> RuntimeSettings:
         min_model_prob=_env_float("MIN_MODEL_PROB", 0.0),
         max_model_prob=_env_float("MAX_MODEL_PROB", 1.0),
         max_daily_slippage_usd=_env_float("MAX_DAILY_SLIPPAGE_USD", 0.0),
+        adaptive_kelly_min_win_rate=_env_float("ADAPTIVE_KELLY_MIN_WIN_RATE", 0.0),
+        adaptive_kelly_lookback_n=_env_int("ADAPTIVE_KELLY_LOOKBACK_N", 20),
+        adaptive_kelly_scale_factor=_env_float("ADAPTIVE_KELLY_SCALE_FACTOR", 0.5),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )
