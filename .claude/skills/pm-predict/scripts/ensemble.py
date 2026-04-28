@@ -43,6 +43,8 @@ def make_prediction_decision(
     claude_probability: float,
     edge_threshold: float = 0.04,
     xgboost_weight: float = 0.60,
+    edge_shrink_threshold: float = 0.0,
+    edge_shrink_factor: float = 1.0,
 ) -> PredictionDecision:
     p_model = ensemble_probability(
         xgboost_probability=xgboost_probability,
@@ -50,8 +52,13 @@ def make_prediction_decision(
         xgboost_weight=xgboost_weight,
     )
     edge = p_model - p_market
-    should_trade = (edge - edge_threshold) > 1e-12
-    reason = "edge cleared threshold" if should_trade else f"edge {edge:.4f} below threshold {edge_threshold}"
+    shrinkage_applied = False
+    effective_edge = edge
+    if edge_shrink_factor < 1.0 and 0.0 < abs(edge) < edge_shrink_threshold:
+        effective_edge = edge * edge_shrink_factor
+        shrinkage_applied = True
+    should_trade = (effective_edge - edge_threshold) > 1e-12
+    reason = "edge cleared threshold" if should_trade else f"edge {effective_edge:.4f} below threshold {edge_threshold}"
     return PredictionDecision(
         condition_id=condition_id,
         token_id=token_id,
@@ -67,5 +74,7 @@ def make_prediction_decision(
             "xgboost_weight": xgboost_weight,
             "claude_weight": 1.0 - xgboost_weight,
             "reason": reason,
+            "shrinkage_applied": shrinkage_applied,
+            "effective_edge": effective_edge,
         },
     )
