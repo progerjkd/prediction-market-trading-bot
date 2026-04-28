@@ -57,6 +57,7 @@ class RuntimeSettings:
     market_cooldown_hours: int = 0  # 0 = disabled
     min_model_prob: float = 0.0  # 0.0 = disabled (no lower bound)
     max_model_prob: float = 1.0  # 1.0 = disabled (no upper bound)
+    max_daily_slippage_usd: float = 0.0  # 0.0 = disabled
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -125,6 +126,7 @@ def load_settings() -> RuntimeSettings:
         market_cooldown_hours=_env_int("MARKET_COOLDOWN_HOURS", 0),
         min_model_prob=_env_float("MIN_MODEL_PROB", 0.0),
         max_model_prob=_env_float("MAX_MODEL_PROB", 1.0),
+        max_daily_slippage_usd=_env_float("MAX_DAILY_SLIPPAGE_USD", 0.0),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )

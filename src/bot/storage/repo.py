@@ -209,6 +209,17 @@ async def net_realized_pnl(conn: aiosqlite.Connection) -> float:
     return float(row[0]) if row else 0.0
 
 
+async def daily_slippage_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
+    """Sum of slippage * size for trades opened after since_ts."""
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(slippage * size), 0) FROM trades "
+        "WHERE opened_at >= ? AND source = ? AND slippage IS NOT NULL",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
 async def daily_trades_opened(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> int:
     """Count trades with opened_at >= since_ts (i.e. opened today)."""
     cur = await conn.execute(
