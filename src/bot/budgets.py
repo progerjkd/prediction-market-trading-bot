@@ -12,6 +12,7 @@ class BudgetLimits:
     daily_loss_pct: float = 0.15
     max_drawdown_pct: float = 0.08
     daily_api_cost_limit: float = 50.0
+    daily_gain_pct: float = 1.0  # default: no cap (100% gain would halt)
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class RuntimeBudgetSnapshot:
     daily_loss_usd: float = 0.0
     drawdown_pct: float = 0.0
     daily_api_cost_usd: float = 0.0
+    daily_gain_usd: float = 0.0
 
 
 def halt_reason(snapshot: RuntimeBudgetSnapshot, limits: BudgetLimits) -> str | None:
@@ -37,5 +39,9 @@ def halt_reason(snapshot: RuntimeBudgetSnapshot, limits: BudgetLimits) -> str | 
             f"daily API cost {snapshot.daily_api_cost_usd:.2f} "
             f"at/above limit {limits.daily_api_cost_limit:.2f}"
         )
+
+    daily_gain_cap = limits.daily_gain_pct * limits.bankroll_usdc
+    if snapshot.daily_gain_usd >= daily_gain_cap:
+        return f"daily gain cap reached: {snapshot.daily_gain_usd:.2f} >= {daily_gain_cap:.2f}"
 
     return None

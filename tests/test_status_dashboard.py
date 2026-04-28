@@ -138,3 +138,32 @@ async def test_status_prints_recent_metrics_header(tmp_path, monkeypatch, capsys
     await async_main(["--status"])
     out = capsys.readouterr().out
     assert "metrics" in out.lower() or "win" in out.lower() or "brier" in out.lower() or "trades" in out.lower()
+
+
+async def test_status_prints_open_paper_position_count_and_exposure(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    await insert_trade(
+        conn,
+        Trade(
+            condition_id="open-cx",
+            token_id="open-tx",
+            side="BUY",
+            size=100,
+            limit_price=0.5,
+            fill_price=0.5,
+        ),
+    )
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "open paper positions" in out.lower()
+    assert "1" in out
+    assert "50.00" in out

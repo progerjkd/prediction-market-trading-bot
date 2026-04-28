@@ -75,7 +75,7 @@ async def test_backtest_writes_trade_for_positive_edge_row(tmp_path):
     conn = await open_db(tmp_path / "bt.sqlite")
     settings = _settings(edge_threshold=0.04)
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         result = await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=settings)
 
     assert result["trades_written"] == 1
@@ -91,7 +91,7 @@ async def test_backtest_outcome_yes_when_label_1(tmp_path):
     conn = await open_db(tmp_path / "bt.sqlite")
     settings = _settings(edge_threshold=0.04)
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=settings)
 
     cur = await conn.execute("SELECT outcome FROM trades LIMIT 1")
@@ -109,7 +109,7 @@ async def test_backtest_outcome_no_when_label_0(tmp_path):
     conn = await open_db(tmp_path / "bt.sqlite")
     settings = _settings(edge_threshold=0.04)
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=settings)
 
     cur = await conn.execute("SELECT outcome FROM trades LIMIT 1")
@@ -129,7 +129,7 @@ async def test_backtest_pnl_positive_for_correct_yes_prediction(tmp_path):
     conn = await open_db(tmp_path / "bt.sqlite")
     settings = _settings(edge_threshold=0.04)
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=settings)
 
     cur = await conn.execute("SELECT pnl FROM trades LIMIT 1")
@@ -148,7 +148,7 @@ async def test_backtest_pnl_negative_for_wrong_prediction(tmp_path):
     conn = await open_db(tmp_path / "bt.sqlite")
     settings = _settings(edge_threshold=0.04)
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=settings)
 
     cur = await conn.execute("SELECT pnl FROM trades LIMIT 1")
@@ -173,7 +173,7 @@ async def test_backtest_returns_summary_dict(tmp_path):
     ])
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         result = await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     assert "trades_written" in result
@@ -197,7 +197,7 @@ async def test_backtest_win_rate_reflects_outcomes(tmp_path):
     ])
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         result = await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     assert result["trades_written"] == 4
@@ -219,7 +219,7 @@ async def test_backtest_writes_backtest_source_for_trades(tmp_path):
     df = _make_df([{"current_mid": 0.35, "label": 1}])
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     cur = await conn.execute("SELECT source FROM trades LIMIT 1")
@@ -238,7 +238,7 @@ async def test_backtest_acceptance_gate_passes_with_explicit_backtest_source(tmp
     df = _make_df(rows)
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         result = await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     assert result["trades_written"] == 70
@@ -256,7 +256,7 @@ async def test_backtest_rows_do_not_satisfy_default_paper_live_gate(tmp_path):
     df = _make_df(rows)
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     accepted, reason = await acceptance_criteria_met(conn)
@@ -273,7 +273,7 @@ async def test_backtest_acceptance_gate_fails_with_too_few_trades(tmp_path):
     df = _make_df([{"current_mid": 0.35, "label": 1}] * 10)
     conn = await open_db(tmp_path / "bt.sqlite")
 
-    with patch("backtest.xgb_infer", return_value=(0.55, "mock")):
+    with patch("backtest.xgb_infer", return_value=(0.55, "mock", {})):
         await run_backtest(conn, df, model_path=tmp_path / "nomodel.json", settings=_settings())
 
     accepted, reason = await acceptance_criteria_met(conn)

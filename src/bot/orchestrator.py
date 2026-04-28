@@ -24,12 +24,19 @@ from bot.storage.models import (
     PaperExecution,
     Prediction,
     ResearchBrief,
+    SkipEvent,
     Trade,
 )
 from bot.storage.repo import (
+    bad_exit_condition_ids,
     close_trade,
+    consecutive_losses,
+    current_drawdown_pct,
     daily_api_cost_usd,
+    daily_gain_usd,
     daily_loss_usd,
+    daily_slippage_usd,
+    daily_trades_opened,
     fetch_open_trades,
     insert_api_spend,
     insert_flagged_market,
@@ -37,9 +44,14 @@ from bot.storage.repo import (
     insert_paper_execution,
     insert_prediction,
     insert_research_brief,
+    insert_skip_event,
     insert_trade,
+    net_realized_pnl,
+    open_condition_ids,
     open_positions_count,
     persist_daily_metrics,
+    recent_win_rate,
+    recently_flagged_condition_ids,
     total_open_exposure,
 )
 
@@ -99,7 +111,9 @@ async def run_once(
 ) -> RunSummary:
     budget_reason = await _current_halt_reason(conn, settings)
     if budget_reason:
-        return RunSummary(halt_reason=budget_reason)
+        summary = RunSummary(halt_reason=budget_reason)
+        _log_summary(summary)
+        return summary
 
     owns_client = polymarket_client is None
     client = polymarket_client or PolymarketClient(
@@ -108,10 +122,43 @@ async def run_once(
     )
     forecaster = claude_client or ClaudeForecastClient()
     try:
-        settled = await _settle_expired_trades(conn, client)
+        settled = await _settle_expired_trades(conn, client, settings=settings)
 
-        markets = await client.list_markets(limit=max_markets, active_only=True)
-        candidates = await _candidates_from_markets(client, markets[:max_markets], book_cache=book_cache)
+        fetch_limit = max(settings.scan_fetch_limit, max_markets)
+        markets = await client.list_markets(limit=fetch_limit, active_only=True)
+        markets_ranked = sorted(markets, key=lambda m: m.volume_24h * m.liquidity, reverse=True)
+
+        dedup_cutoff = int(time.time()) - settings.scan_interval_seconds
+        seen_ids = await recently_flagged_condition_ids(conn, dedup_cutoff)
+        markets_to_scan: list[Market] = []
+        for market in markets_ranked:
+            if market.condition_id in seen_ids:
+                await _record_market_skip(
+                    conn,
+                    market=market,
+                    stage="dedup",
+                    reason="recently_flagged",
+                )
+                continue
+            metadata_skip_reason = _market_metadata_skip_reason(market, settings)
+            if metadata_skip_reason is not None:
+                await _record_market_skip(
+                    conn,
+                    market=market,
+                    stage="scan_filter",
+                    reason=metadata_skip_reason,
+                    detail=_market_detail(market),
+                )
+                continue
+            markets_to_scan.append(market)
+            if len(markets_to_scan) >= max_markets:
+                break
+
+        candidates = await _candidates_from_markets(
+            client, markets_to_scan,
+            book_cache=book_cache,
+            max_cache_age=settings.ws_orderbook_max_age_seconds,
+        )
         flagged = filter_tradeable_markets(
             candidates,
             min_volume=settings.scan_min_volume,
@@ -119,12 +166,22 @@ async def run_once(
             max_spread=settings.scan_max_spread,
             min_liquidity=settings.scan_min_liquidity,
         )
+        flagged_ids = {c.condition_id for c in flagged}
+        for candidate in candidates:
+            if candidate.condition_id not in flagged_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="scan_filter",
+                    reason=_scan_filter_reason(candidate, settings),
+                    detail=_candidate_detail(candidate),
+                )
 
         for candidate in flagged:
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
 
         if scan_only:
-            return RunSummary(
+            summary = RunSummary(
                 scanned_markets=len(markets),
                 flagged_markets=len(flagged),
                 trades_settled=settled,
@@ -132,12 +189,38 @@ async def run_once(
                 lessons_written=settled,
                 flagged_yes_tokens=[c.yes_token for c in flagged],
             )
+            _log_summary(summary)
+            return summary
 
         predictions_written = 0
         trades_written = 0
         no_fill_trades = 0
         skipped = 0
+        held_condition_ids = await open_condition_ids(conn)
+        cooled_ids: set[str] = set()
+        if settings.market_cooldown_hours > 0:
+            cooldown_since = int(time.time()) - settings.market_cooldown_hours * 3600
+            cooled_ids = await bad_exit_condition_ids(conn, cooldown_since)
         for candidate in flagged:
+            if candidate.condition_id in held_condition_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="position_gate",
+                    reason="already_open_position",
+                )
+                skipped += 1
+                continue
+            if candidate.condition_id in cooled_ids:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="cooldown",
+                    reason="market_cooldown",
+                    detail={"cooldown_hours": settings.market_cooldown_hours},
+                )
+                skipped += 1
+                continue
             decision = await _predict(candidate, settings, forecaster, mock_ai=mock_ai)
             prediction_id = await insert_prediction(
                 conn,
@@ -172,6 +255,33 @@ async def run_once(
             )
 
             if not decision.should_trade:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="decision",
+                    reason="decision_should_trade_false",
+                    detail={
+                        "p_model": decision.p_model,
+                        "p_market": decision.p_market,
+                        "edge": decision.edge,
+                        "edge_threshold": settings.edge_threshold,
+                    },
+                )
+                skipped += 1
+                continue
+
+            if not (settings.min_model_prob <= decision.p_model <= settings.max_model_prob):
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="confidence_gate",
+                    reason="model_probability_out_of_bounds",
+                    detail={
+                        "p_model": decision.p_model,
+                        "min_model_prob": settings.min_model_prob,
+                        "max_model_prob": settings.max_model_prob,
+                    },
+                )
                 skipped += 1
                 continue
 
@@ -185,9 +295,27 @@ async def run_once(
                 p_market=decision.p_market,
             )
             if execution_plan is None:
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="risk_or_sizing",
+                    reason="risk_or_sizing_rejected",
+                    detail={"p_model": decision.p_model, "p_market": decision.p_market},
+                )
                 skipped += 1
             elif execution_plan.trade is None:
                 await insert_paper_execution(conn, execution_plan.execution)
+                await _record_skip(
+                    conn,
+                    candidate=candidate,
+                    stage="execution",
+                    reason="no_fill",
+                    detail={
+                        "requested_size": execution_plan.execution.requested_size,
+                        "unfilled_size": execution_plan.execution.unfilled_size,
+                        "limit_price": execution_plan.execution.limit_price,
+                    },
+                )
                 no_fill_trades += 1
                 skipped += 1
             else:
@@ -199,7 +327,7 @@ async def run_once(
         today = _today_iso()
         await persist_daily_metrics(conn, today)
 
-        return RunSummary(
+        summary = RunSummary(
             scanned_markets=len(markets),
             flagged_markets=len(flagged),
             predictions_written=predictions_written,
@@ -211,6 +339,8 @@ async def run_once(
             lessons_written=settled,
             flagged_yes_tokens=[c.yes_token for c in flagged],
         )
+        _log_summary(summary)
+        return summary
     finally:
         if owns_client:
             await client.close()
@@ -220,13 +350,15 @@ async def _candidates_from_markets(
     client: PolymarketClient | Any,
     markets: list[Market],
     book_cache: OrderBookCache | None = None,
+    max_cache_age: int = 300,
 ) -> list[MarketCandidate]:
     candidates: list[MarketCandidate] = []
+    stale_cutoff = int(time.time()) - max_cache_age
     for market in markets:
         if market.closed:
             continue
         cached = book_cache.get(market.yes_token) if book_cache else None
-        if cached is not None:
+        if cached is not None and cached.timestamp >= stale_cutoff:
             book = cached
         else:
             try:
@@ -286,11 +418,12 @@ async def _predict(
     if not mock_ai:
         forecast_cost_usd = forecast.cost_usd
 
+    xgb_importances: dict[str, float] = {}
     if mock_ai:
         xgboost_probability = min(0.95, candidate.mid_price + 0.12)
         xgb_source = "mock_ai"
     else:
-        xgboost_probability, xgb_source = xgb_infer(
+        xgboost_probability, xgb_source, xgb_importances = xgb_infer(
             {
                 "current_mid": candidate.mid_price,
                 "spread": candidate.spread,
@@ -316,6 +449,7 @@ async def _predict(
     components["xgb_source"] = xgb_source
     components["narrative_score"] = narrative_score
     components["forecast_cost_usd"] = forecast_cost_usd
+    components["xgb_importances"] = xgb_importances
     return type(decision)(
         condition_id=decision.condition_id,
         token_id=decision.token_id,
@@ -339,7 +473,9 @@ async def _paper_execute_if_allowed(
     p_model: float,
     p_market: float,
 ) -> _PaperExecutionPlan | None:
-    size_usd = _proposed_size_usd(p_model=p_model, p_market=p_market, settings=settings)
+    bankroll = await effective_bankroll_usd(conn, base_bankroll=settings.bankroll_usdc)
+    kelly_fraction = await _adaptive_kelly_fraction(conn, settings)
+    size_usd = _proposed_size_usd_with_bankroll(p_model=p_model, p_market=p_market, settings=settings, bankroll=bankroll, kelly_fraction=kelly_fraction)
     if size_usd <= 0:
         return None
 
@@ -351,11 +487,11 @@ async def _paper_execute_if_allowed(
             p_market=p_market,
             b=_net_odds_from_price(p_market),
             size_usd=size_usd,
-            bankroll_usd=settings.bankroll_usdc,
+            bankroll_usd=bankroll,
             open_positions=await open_positions_count(conn),
             total_exposure_usd=await total_open_exposure(conn),
             daily_loss_usd=await daily_loss_usd(conn, day_start),
-            drawdown_pct=0.0,
+            drawdown_pct=await current_drawdown_pct(conn, settings.bankroll_usdc),
             daily_api_cost_usd=await daily_api_cost_usd(conn, day_start),
             stop_file=settings.stop_file,
         ),
@@ -419,14 +555,38 @@ async def _settle_expired_trades(
     client: Any,
     *,
     failure_log_path: Path | None = None,
+    settings: RuntimeSettings | None = None,
 ) -> int:
     """Close paper trades whose markets have resolved; run postmortem on each."""
     log_path = failure_log_path or FAILURE_LOG_PATH
     open_trades = await fetch_open_trades(conn)
     now = int(time.time())
     settled = 0
+    timeout_cutoff = now - (settings.position_timeout_days if settings else 30) * 86_400
+    stop_pct = settings.stop_loss_pct if settings else 0.0
 
     for record in open_trades:
+        # Stop-loss sweep — check non-expired trades too
+        if stop_pct > 0.0 and record.fill_price:
+            stop_threshold = record.fill_price * (1.0 - stop_pct)
+            try:
+                book = await client.get_orderbook(record.token_id)
+                current_mid = book.mid
+            except Exception:
+                current_mid = None
+            if current_mid is not None and current_mid < stop_threshold:
+                pnl = (current_mid - record.fill_price) * record.size
+                await close_trade(conn, record.trade_id, pnl=pnl, outcome="STOP_LOSS")
+                await insert_lesson(
+                    conn,
+                    Lesson(trade_id=record.trade_id, cause="stop_loss", rule_proposed="stop_loss",
+                           notes=f"price {current_mid:.4f} below stop {stop_threshold:.4f}"),
+                )
+                log.info("stop-loss closed trade %d: mid=%.4f stop=%.4f pnl=%.2f",
+                         record.trade_id, current_mid, stop_threshold, pnl)
+                settled += 1
+                continue
+
         if record.end_date_iso and not _is_expired(record.end_date_iso, now):
             continue
 
@@ -437,6 +597,18 @@ async def _settle_expired_trades(
             continue
 
         if not resolution.resolved:
+            # Force-close if market expired beyond the timeout grace period and still unresolved
+            if record.end_date_iso and _is_expired(record.end_date_iso, timeout_cutoff):
+                fill = record.fill_price or 0.0
+                pnl = -fill * record.size  # worst-case: price went to 0
+                await close_trade(conn, record.trade_id, pnl=pnl, outcome="TIMEOUT")
+                await insert_lesson(
+                    conn,
+                    Lesson(trade_id=record.trade_id, cause="timeout", rule_proposed="force_close",
+                           notes="market did not resolve within timeout window"),
+                )
+                log.info("timeout-closed trade %d: pnl=%.2f", record.trade_id, pnl)
+                settled += 1
             continue
 
         final_price = resolution.final_yes_price if resolution.final_yes_price is not None else 0.0
@@ -517,11 +689,12 @@ def _is_expired(end_date_iso: str | None, now: int) -> bool:
 async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSettings) -> str | None:
     now = int(time.time())
     day_start = now - (now % 86_400)
-    return halt_reason(
+    reason = halt_reason(
         RuntimeBudgetSnapshot(
             daily_loss_usd=await daily_loss_usd(conn, day_start),
-            drawdown_pct=0.0,
+            drawdown_pct=await current_drawdown_pct(conn, settings.bankroll_usdc),
             daily_api_cost_usd=await daily_api_cost_usd(conn, day_start),
+            daily_gain_usd=await daily_gain_usd(conn, day_start),
         ),
         BudgetLimits(
             stop_file=settings.stop_file,
@@ -529,19 +702,68 @@ async def _current_halt_reason(conn: aiosqlite.Connection, settings: RuntimeSett
             daily_loss_pct=settings.daily_loss_pct,
             max_drawdown_pct=settings.max_drawdown_pct,
             daily_api_cost_limit=settings.daily_api_cost_limit,
+            daily_gain_pct=settings.daily_gain_pct,
         ),
     )
+    if reason:
+        return reason
+    if settings.max_consecutive_losses > 0:
+        streak = await consecutive_losses(conn)
+        if streak >= settings.max_consecutive_losses:
+            return f"consecutive loss streak {streak} >= limit {settings.max_consecutive_losses}"
+    if settings.max_daily_trades > 0:
+        opened_today = await daily_trades_opened(conn, day_start)
+        if opened_today >= settings.max_daily_trades:
+            return f"daily trades {opened_today} >= limit {settings.max_daily_trades}"
+    if settings.max_daily_slippage_usd > 0:
+        slip_today = await daily_slippage_usd(conn, day_start)
+        if slip_today >= settings.max_daily_slippage_usd:
+            return f"daily slippage {slip_today:.2f} >= limit {settings.max_daily_slippage_usd:.2f}"
+    return None
+
+
+async def _adaptive_kelly_fraction(conn: aiosqlite.Connection, settings: RuntimeSettings) -> float:
+    """Return the effective kelly_fraction, scaled down when recent win rate is below threshold."""
+    if settings.adaptive_kelly_min_win_rate <= 0.0:
+        return settings.kelly_fraction
+    wr = await recent_win_rate(conn, settings.adaptive_kelly_lookback_n)
+    if wr is None:
+        return settings.kelly_fraction
+    if wr < settings.adaptive_kelly_min_win_rate:
+        return settings.kelly_fraction * settings.adaptive_kelly_scale_factor
+    return settings.kelly_fraction
 
 
 def _proposed_size_usd(*, p_model: float, p_market: float, settings: RuntimeSettings) -> float:
+    return _proposed_size_usd_with_bankroll(
+        p_model=p_model, p_market=p_market, settings=settings, bankroll=settings.bankroll_usdc
+    )
+
+
+def _proposed_size_usd_with_bankroll(
+    *, p_model: float, p_market: float, settings: RuntimeSettings, bankroll: float, kelly_fraction: float | None = None
+) -> float:
+    fraction = kelly_fraction if kelly_fraction is not None else settings.kelly_fraction
     kelly_cap = kelly_size(
         p=p_model,
         b=_net_odds_from_price(p_market),
-        bankroll=settings.bankroll_usdc,
-        fraction=settings.kelly_fraction,
+        bankroll=bankroll,
+        fraction=fraction,
     )
-    position_cap = settings.max_position_pct * settings.bankroll_usdc
+    position_cap = settings.max_position_pct * bankroll
     return min(100.0, kelly_cap, position_cap)
+
+
+async def effective_bankroll_usd(
+    conn: aiosqlite.Connection,
+    *,
+    base_bankroll: float,
+    floor_fraction: float = 0.10,
+) -> float:
+    """Base bankroll adjusted for all realized P&L; floored at floor_fraction of base."""
+    pnl = await net_realized_pnl(conn)
+    floor = base_bankroll * floor_fraction
+    return max(floor, base_bankroll + pnl)
 
 
 def _net_odds_from_price(price: float) -> float:
@@ -556,6 +778,90 @@ def _to_paper_orderbook(book: OrderBookSnapshot) -> OrderBook:
     )
 
 
+async def _record_skip(
+    conn: aiosqlite.Connection,
+    *,
+    candidate: MarketCandidate,
+    stage: str,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await insert_skip_event(
+        conn,
+        SkipEvent(
+            condition_id=candidate.condition_id,
+            token_id=candidate.yes_token,
+            stage=stage,
+            reason=reason,
+            detail=detail or {},
+        ),
+    )
+
+
+async def _record_market_skip(
+    conn: aiosqlite.Connection,
+    *,
+    market: Market,
+    stage: str,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await insert_skip_event(
+        conn,
+        SkipEvent(
+            condition_id=market.condition_id,
+            token_id=market.yes_token,
+            stage=stage,
+            reason=reason,
+            detail=detail or {},
+        ),
+    )
+
+
+def _market_detail(market: Market) -> dict[str, float | str | bool | None]:
+    return {
+        "volume_24h": market.volume_24h,
+        "liquidity": market.liquidity,
+        "days_to_resolution": _market_days_remaining(market.end_date_iso),
+        "closed": market.closed,
+    }
+
+
+def _market_metadata_skip_reason(market: Market, settings: RuntimeSettings) -> str | None:
+    days = _market_days_remaining(market.end_date_iso)
+    if market.closed:
+        return "closed_market"
+    if market.volume_24h < settings.scan_min_volume:
+        return "low_volume"
+    if days > settings.scan_max_days:
+        return "too_far_to_resolution"
+    if market.liquidity < settings.scan_min_liquidity:
+        return "low_liquidity"
+    return None
+
+
+def _candidate_detail(candidate: MarketCandidate) -> dict[str, float | str | None]:
+    return {
+        "volume_24h": candidate.volume_24h,
+        "liquidity": candidate.liquidity,
+        "spread": candidate.spread,
+        "days_to_resolution": _market_days_remaining(candidate.end_date_iso),
+    }
+
+
+def _scan_filter_reason(candidate: MarketCandidate, settings: RuntimeSettings) -> str:
+    days = _market_days_remaining(candidate.end_date_iso)
+    if candidate.volume_24h < settings.scan_min_volume:
+        return "low_volume"
+    if days > settings.scan_max_days:
+        return "too_far_to_resolution"
+    if candidate.spread > settings.scan_max_spread:
+        return "wide_spread"
+    if candidate.liquidity < settings.scan_min_liquidity:
+        return "low_liquidity"
+    return "scan_filter_rejected"
+
+
 def summary_to_json(summary: RunSummary) -> str:
     return json.dumps(summary.__dict__, sort_keys=True)
 
@@ -563,3 +869,17 @@ def summary_to_json(summary: RunSummary) -> str:
 def _today_iso() -> str:
     from datetime import date
     return date.today().isoformat()
+
+
+def _log_summary(summary: RunSummary) -> None:
+    log.info(
+        json.dumps({
+            "ts": int(time.time()),
+            "scanned": summary.scanned_markets,
+            "flagged": summary.flagged_markets,
+            "predictions": summary.predictions_written,
+            "trades": summary.paper_trades_written,
+            "settled": summary.trades_settled,
+            "halt": summary.halt_reason,
+        })
+    )

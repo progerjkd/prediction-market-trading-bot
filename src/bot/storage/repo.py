@@ -1,6 +1,7 @@
 """Repository layer — typed CRUD for persisted records."""
 from __future__ import annotations
 
+import json
 import time
 from datetime import date, datetime
 
@@ -16,6 +17,7 @@ from .models import (
     PaperExecution,
     Prediction,
     ResearchBrief,
+    SkipEvent,
     Trade,
 )
 
@@ -57,6 +59,26 @@ async def latest_flagged_markets(
     )
     rows = await cur.fetchall()
     return [FlaggedMarket(*row) for row in rows]
+
+
+async def open_condition_ids(conn: aiosqlite.Connection, source: str = "paper_live") -> set[str]:
+    """Return condition_ids that have at least one open (unclosed) trade."""
+    cur = await conn.execute(
+        "SELECT DISTINCT condition_id FROM trades WHERE closed_at IS NULL AND source = ?",
+        (source,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
+
+
+async def recently_flagged_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
+    """Return condition_ids flagged at or after since_ts (Unix seconds)."""
+    cur = await conn.execute(
+        "SELECT DISTINCT condition_id FROM markets_flagged WHERE flagged_at >= ?",
+        (since_ts,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
 
 
 async def insert_research_brief(conn: aiosqlite.Connection, b: ResearchBrief) -> None:
@@ -126,6 +148,79 @@ async def insert_paper_execution(conn: aiosqlite.Connection, e: PaperExecution) 
     return cur.lastrowid
 
 
+async def insert_skip_event(conn: aiosqlite.Connection, event: SkipEvent) -> int:
+    cur = await conn.execute(
+        "INSERT INTO skip_events "
+        "(condition_id, token_id, stage, reason, detail_json, source, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            event.condition_id,
+            event.token_id,
+            event.stage,
+            event.reason,
+            event.detail_json(),
+            event.source,
+            event.created_at,
+        ),
+    )
+    await conn.commit()
+    event.id = cur.lastrowid
+    return cur.lastrowid
+
+
+async def recent_skip_events(
+    conn: aiosqlite.Connection,
+    *,
+    limit: int = 20,
+    source: str = "paper_live",
+) -> list[SkipEvent]:
+    cur = await conn.execute(
+        """
+        SELECT condition_id, token_id, stage, reason, detail_json, source, created_at, id
+        FROM skip_events
+        WHERE source = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (source, limit),
+    )
+    rows = await cur.fetchall()
+    return [
+        SkipEvent(
+            condition_id=r[0],
+            token_id=r[1],
+            stage=r[2],
+            reason=r[3],
+            detail=json.loads(r[4] or "{}"),
+            source=r[5],
+            created_at=r[6],
+            id=r[7],
+        )
+        for r in rows
+    ]
+
+
+async def skip_reason_counts(
+    conn: aiosqlite.Connection,
+    *,
+    since_seconds_ago: int = 86_400,
+    source: str = "paper_live",
+) -> dict[str, int]:
+    cutoff = int(time.time()) - since_seconds_ago
+    cur = await conn.execute(
+        """
+        SELECT reason, COUNT(*)
+        FROM skip_events
+        WHERE source = ? AND created_at >= ?
+        GROUP BY reason
+        ORDER BY COUNT(*) DESC, reason ASC
+        """,
+        (source, cutoff),
+    )
+    rows = await cur.fetchall()
+    return {str(reason): int(count) for reason, count in rows}
+
+
 async def close_trade(
     conn: aiosqlite.Connection, trade_id: int, pnl: float, outcome: str, closed_at: int | None = None
 ) -> None:
@@ -170,6 +265,124 @@ async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int, source: str 
     return float(row[0]) if row else 0.0
 
 
+async def daily_gain_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) "
+        "FROM trades WHERE closed_at >= ? AND source = ?",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
+async def net_realized_pnl(conn: aiosqlite.Connection) -> float:
+    """Sum of pnl across all closed trades (any source)."""
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE closed_at IS NOT NULL"
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
+async def daily_slippage_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
+    """Sum of slippage * size for trades opened after since_ts."""
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(slippage * size), 0) FROM trades "
+        "WHERE opened_at >= ? AND source = ? AND slippage IS NOT NULL",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
+async def daily_trades_opened(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> int:
+    """Count trades with opened_at >= since_ts (i.e. opened today)."""
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE opened_at >= ? AND source = ?",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def current_drawdown_pct(conn: aiosqlite.Connection, base_bankroll: float) -> float:
+    """Current drawdown as a fraction: (peak_equity - current_equity) / peak_equity."""
+    cur = await conn.execute(
+        "SELECT pnl FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at ASC"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return 0.0
+    equity = base_bankroll
+    peak = equity
+    for (pnl,) in rows:
+        if pnl is not None:
+            equity += pnl
+        if equity > peak:
+            peak = equity
+    return (peak - equity) / peak if peak > 0 else 0.0
+
+
+async def bad_exit_condition_ids(conn: aiosqlite.Connection, since_ts: int) -> set[str]:
+    """condition_ids with STOP_LOSS or TIMEOUT outcomes closed after since_ts."""
+    cur = await conn.execute(
+        "SELECT condition_id FROM trades "
+        "WHERE outcome IN ('STOP_LOSS', 'TIMEOUT') AND closed_at >= ?",
+        (since_ts,),
+    )
+    rows = await cur.fetchall()
+    return {row[0] for row in rows}
+
+
+async def consecutive_losses(conn: aiosqlite.Connection) -> int:
+    """Count of the most-recent consecutive closed trades with pnl < 0."""
+    cur = await conn.execute(
+        "SELECT pnl FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC"
+    )
+    rows = await cur.fetchall()
+    streak = 0
+    for (pnl,) in rows:
+        if pnl is not None and pnl < 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+async def recent_win_rate(conn: aiosqlite.Connection, n: int) -> float | None:
+    """Win rate of the N most recent YES/NO closed trades (excludes TIMEOUT/STOP_LOSS)."""
+    cur = await conn.execute(
+        "SELECT outcome FROM trades WHERE closed_at IS NOT NULL AND outcome IN ('YES', 'NO') "
+        "ORDER BY closed_at DESC LIMIT ?",
+        (n,),
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return None
+    wins = sum(1 for (outcome,) in rows if outcome == "YES")
+    return wins / len(rows)
+
+
+async def current_brier_score(conn: aiosqlite.Connection) -> float | None:
+    """Mean squared error of p_model vs outcome over all resolved YES/NO trades."""
+    cur = await conn.execute(
+        """
+        SELECT p.p_model, t.outcome
+        FROM predictions p
+        JOIN trades t ON t.prediction_id = p.id
+        WHERE t.closed_at IS NOT NULL AND t.outcome IN ('YES', 'NO')
+        """
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return None
+    total = sum(
+        (p_model - (1.0 if outcome == "YES" else 0.0)) ** 2
+        for p_model, outcome in rows
+    )
+    return total / len(rows)
+
+
 async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_live") -> list[OpenTradeRecord]:
     """Return all open (unclosed) paper trades with their market end_date_iso."""
     cur = await conn.execute(
@@ -177,6 +390,7 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
         SELECT
             t.id,
             t.condition_id,
+            t.token_id,
             t.fill_price,
             t.size,
             t.slippage,
@@ -193,7 +407,13 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
         (source,),
     )
     rows = await cur.fetchall()
-    return [OpenTradeRecord(trade_id=r[0], condition_id=r[1], fill_price=r[2], size=r[3], slippage=r[4], end_date_iso=r[5]) for r in rows]
+    return [
+        OpenTradeRecord(
+            trade_id=r[0], condition_id=r[1], token_id=r[2],
+            fill_price=r[3], size=r[4], slippage=r[5], end_date_iso=r[6],
+        )
+        for r in rows
+    ]
 
 
 async def insert_lesson(conn: aiosqlite.Connection, lesson: Lesson) -> int:

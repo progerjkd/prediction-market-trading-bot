@@ -31,6 +31,7 @@ class RuntimeSettings:
     edge_threshold: float = 0.04
     daily_api_cost_limit: float = 50.0
     daily_loss_pct: float = 0.15
+    daily_gain_pct: float = 1.0
     max_drawdown_pct: float = 0.08
     max_open_positions: int = 15
     max_position_pct: float = 0.05
@@ -47,6 +48,19 @@ class RuntimeSettings:
     scan_max_spread: float = 0.05
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
+    scan_fetch_limit: int = 50
+    position_timeout_days: int = 30
+    ws_orderbook_max_age_seconds: int = 300
+    stop_loss_pct: float = 0.0
+    max_consecutive_losses: int = 0  # 0 = disabled
+    max_daily_trades: int = 0  # 0 = disabled
+    market_cooldown_hours: int = 0  # 0 = disabled
+    min_model_prob: float = 0.0  # 0.0 = disabled (no lower bound)
+    max_model_prob: float = 1.0  # 1.0 = disabled (no upper bound)
+    max_daily_slippage_usd: float = 0.0  # 0.0 = disabled
+    adaptive_kelly_min_win_rate: float = 0.0  # 0.0 = disabled
+    adaptive_kelly_lookback_n: int = 20
+    adaptive_kelly_scale_factor: float = 0.5
     xgboost_model_path: Path = Path("data/models/xgboost.json")
     training_data_path: Path = Path("data/training_data.csv")
 
@@ -89,6 +103,7 @@ def load_settings() -> RuntimeSettings:
         edge_threshold=_env_float("EDGE_THRESHOLD", 0.04),
         daily_api_cost_limit=_env_float("DAILY_API_COST_LIMIT", 50.0),
         daily_loss_pct=_env_float("DAILY_LOSS_LIMIT_PCT", 0.15),
+        daily_gain_pct=_env_float("DAILY_GAIN_PCT", 1.0),
         max_drawdown_pct=_env_float("MAX_DRAWDOWN_PCT", 0.08),
         max_open_positions=_env_int("MAX_OPEN_POSITIONS", 15),
         max_position_pct=_env_float("MAX_POSITION_PCT", 0.05),
@@ -105,6 +120,19 @@ def load_settings() -> RuntimeSettings:
         scan_max_spread=_env_float("SCAN_MAX_SPREAD", 0.05),
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
+        scan_fetch_limit=_env_int("SCAN_FETCH_LIMIT", 50),
+        position_timeout_days=_env_int("POSITION_TIMEOUT_DAYS", 30),
+        ws_orderbook_max_age_seconds=_env_int("WS_ORDERBOOK_MAX_AGE_SECONDS", 300),
+        stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.0),
+        max_consecutive_losses=_env_int("MAX_CONSECUTIVE_LOSSES", 0),
+        max_daily_trades=_env_int("MAX_DAILY_TRADES", 0),
+        market_cooldown_hours=_env_int("MARKET_COOLDOWN_HOURS", 0),
+        min_model_prob=_env_float("MIN_MODEL_PROB", 0.0),
+        max_model_prob=_env_float("MAX_MODEL_PROB", 1.0),
+        max_daily_slippage_usd=_env_float("MAX_DAILY_SLIPPAGE_USD", 0.0),
+        adaptive_kelly_min_win_rate=_env_float("ADAPTIVE_KELLY_MIN_WIN_RATE", 0.0),
+        adaptive_kelly_lookback_n=_env_int("ADAPTIVE_KELLY_LOOKBACK_N", 20),
+        adaptive_kelly_scale_factor=_env_float("ADAPTIVE_KELLY_SCALE_FACTOR", 0.5),
         xgboost_model_path=Path(os.environ.get("XGBOOST_MODEL_PATH", "data/models/xgboost.json")),
         training_data_path=Path(os.environ.get("TRAINING_DATA_PATH", "data/training_data.csv")),
     )
