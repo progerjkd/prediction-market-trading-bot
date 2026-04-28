@@ -118,6 +118,10 @@ class OrderBookSubscriber:
     def stop(self) -> None:
         self._stop.set()
 
+    def update_tokens(self, token_ids: list[str]) -> None:
+        """Replace the subscribed token list (deduped). Takes effect on next reconnect."""
+        self.token_ids = list(dict.fromkeys(token_ids))
+
     async def run(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():

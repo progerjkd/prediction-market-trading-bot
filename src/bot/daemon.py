@@ -148,6 +148,7 @@ async def _run_repeating(
                 book_cache=book_cache,
             )
             log.info("daemon pass summary=%s", summary_to_json(summary))
+            subscriber.update_tokens(summary.flagged_yes_tokens)
             if summary.halt_reason:
                 log.warning("halting daemon: %s", summary.halt_reason)
                 return 0

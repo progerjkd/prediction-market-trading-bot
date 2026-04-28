@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,7 @@ class RunSummary:
     skipped_signals: int = 0
     trades_settled: int = 0
     halt_reason: str | None = None
+    flagged_yes_tokens: list[str] = field(default_factory=list)
 
 
 async def run_once(
@@ -104,7 +105,12 @@ async def run_once(
             await insert_flagged_market(conn, FlaggedMarket(**to_flagged_market_kwargs(candidate)))
 
         if scan_only:
-            return RunSummary(scanned_markets=len(markets), flagged_markets=len(flagged), trades_settled=settled)
+            return RunSummary(
+                scanned_markets=len(markets),
+                flagged_markets=len(flagged),
+                trades_settled=settled,
+                flagged_yes_tokens=[c.yes_token for c in flagged],
+            )
 
         predictions_written = 0
         trades_written = 0
@@ -169,6 +175,7 @@ async def run_once(
             no_fill_trades=no_fill_trades,
             skipped_signals=skipped,
             trades_settled=settled,
+            flagged_yes_tokens=[c.yes_token for c in flagged],
         )
     finally:
         if owns_client:
