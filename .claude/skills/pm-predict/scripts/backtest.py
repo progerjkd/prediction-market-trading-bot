@@ -40,6 +40,12 @@ async def run_backtest(
     from bot.storage.models import FlaggedMarket, Prediction, Trade
     from bot.storage.repo import close_trade, insert_flagged_market, insert_prediction, insert_trade
 
+    # Idempotent: clear any previous backtest rows so re-runs start fresh.
+    await conn.execute("DELETE FROM trades WHERE condition_id LIKE 'bt_%'")
+    await conn.execute("DELETE FROM predictions WHERE condition_id LIKE 'bt_%'")
+    await conn.execute("DELETE FROM markets_flagged WHERE condition_id LIKE 'bt_%'")
+    await conn.commit()
+
     trades_written = 0
     win_count = 0
     rows_skipped = 0

@@ -22,7 +22,11 @@ from bot.mock_data import MockPolymarketClient  # noqa: E402
 from bot.orchestrator import run_once, summary_to_json  # noqa: E402
 from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # noqa: E402
 from bot.storage.db import open_db  # noqa: E402
-from bot.storage.repo import acceptance_criteria_met, recent_daily_metrics  # noqa: E402
+from bot.storage.repo import (  # noqa: E402
+    acceptance_criteria_met,
+    persist_daily_metrics,
+    recent_daily_metrics,
+)
 
 log = logging.getLogger(__name__)
 
@@ -244,6 +248,8 @@ async def async_main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.backtest:
+            from datetime import date
+
             import pandas as pd
             csv_path = settings.training_data_path
             if not csv_path.exists():
@@ -256,6 +262,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                 f"win_rate={result['win_rate']:.1%}, "
                 f"{result['rows_skipped']} rows skipped"
             )
+            await persist_daily_metrics(conn, date.today().isoformat())
             await _print_status(conn)
             return 0
 
