@@ -69,7 +69,35 @@ class ClaudeForecastClient:
         text = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
         probability = _extract_probability(text, default=p_market)
         usage = response.usage.model_dump() if hasattr(response.usage, "model_dump") else None
-        return ForecastResult(probability=probability, reasoning=text[:1_000], usage=usage)
+        cost = cost_usd_from_usage(usage, model=self.model)
+        return ForecastResult(probability=probability, reasoning=text[:1_000], usage=usage, cost_usd=cost)
+
+
+# Token pricing per million tokens (MTok) for each model family.
+_PRICING: dict[str, dict[str, float]] = {
+    "claude-opus": {"input": 15.00, "output": 75.00, "cache_read": 1.50},
+    "claude-sonnet": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+    "claude-haiku": {"input": 0.80, "output": 4.00, "cache_read": 0.08},
+}
+_DEFAULT_PRICING = _PRICING["claude-sonnet"]
+
+
+def cost_usd_from_usage(usage: dict[str, Any] | None, *, model: str) -> float:
+    """Compute API cost in USD from an Anthropic usage dict and model name."""
+    if not usage:
+        return 0.0
+    pricing = _DEFAULT_PRICING
+    for prefix, rates in _PRICING.items():
+        if prefix in model:
+            pricing = rates
+            break
+    per_tok = {k: v / 1_000_000 for k, v in pricing.items()}
+    cost = (
+        usage.get("input_tokens", 0) * per_tok["input"]
+        + usage.get("output_tokens", 0) * per_tok["output"]
+        + usage.get("cache_read_input_tokens", 0) * per_tok["cache_read"]
+    )
+    return cost
 
 
 def _extract_probability(text: str, *, default: float) -> float:

@@ -17,12 +17,13 @@ from bot.paper.simulator import OrderBook, OrderBookLevel, Side, simulate_fill
 from bot.polymarket.client import Market, OrderBookSnapshot, PolymarketClient
 from bot.polymarket.ws_orderbook import OrderBookCache
 from bot.skills import ensure_skill_script_paths
-from bot.storage.models import FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
+from bot.storage.models import ApiSpend, FlaggedMarket, Lesson, Prediction, ResearchBrief, Trade
 from bot.storage.repo import (
     close_trade,
     daily_api_cost_usd,
     daily_loss_usd,
     fetch_open_trades,
+    insert_api_spend,
     insert_flagged_market,
     insert_lesson,
     insert_prediction,
@@ -128,6 +129,14 @@ async def run_once(
                     p_market=decision.p_market,
                     edge=decision.edge,
                     components=decision.components,
+                ),
+            )
+            await insert_api_spend(
+                conn,
+                ApiSpend(
+                    provider="anthropic",
+                    model=forecaster.model if not mock_ai else "mock",
+                    cost_usd=decision.components.get("forecast_cost_usd", 0.0),
                 ),
             )
             predictions_written += 1
@@ -249,6 +258,9 @@ async def _predict(
         claude_reason = forecast.reasoning
 
     narrative_score = lexical_sentiment_score(claude_reason)
+    forecast_cost_usd: float = 0.0
+    if not mock_ai:
+        forecast_cost_usd = forecast.cost_usd
 
     if mock_ai:
         xgboost_probability = min(0.95, candidate.mid_price + 0.12)
@@ -279,6 +291,7 @@ async def _predict(
     components["research_prompt"] = research_prompt
     components["xgb_source"] = xgb_source
     components["narrative_score"] = narrative_score
+    components["forecast_cost_usd"] = forecast_cost_usd
     return type(decision)(
         condition_id=decision.condition_id,
         token_id=decision.token_id,
