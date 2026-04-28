@@ -110,6 +110,7 @@ async def run_backtest(
                 is_paper=True,
                 prediction_id=pred_id,
                 opened_at=now,
+                source="backtest",
             ),
         )
 

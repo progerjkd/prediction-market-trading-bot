@@ -85,12 +85,12 @@ async def insert_trade(conn: aiosqlite.Connection, t: Trade) -> int:
     cur = await conn.execute(
         "INSERT INTO trades "
         "(prediction_id, condition_id, token_id, side, size, limit_price, fill_price, "
-        " slippage, intended_size, is_paper, opened_at, closed_at, pnl, outcome) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " slippage, intended_size, is_paper, opened_at, closed_at, pnl, outcome, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             t.prediction_id, t.condition_id, t.token_id, t.side, t.size, t.limit_price,
             t.fill_price, t.slippage, t.intended_size, int(t.is_paper), t.opened_at,
-            t.closed_at, t.pnl, t.outcome,
+            t.closed_at, t.pnl, t.outcome, t.source,
         ),
     )
     await conn.commit()
@@ -136,37 +136,41 @@ async def close_trade(
     await conn.commit()
 
 
-async def open_positions_count(conn: aiosqlite.Connection) -> int:
-    cur = await conn.execute("SELECT COUNT(*) FROM trades WHERE closed_at IS NULL")
+async def open_positions_count(conn: aiosqlite.Connection, source: str = "paper_live") -> int:
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE closed_at IS NULL AND source = ?",
+        (source,),
+    )
     row = await cur.fetchone()
     return int(row[0]) if row else 0
 
 
-async def total_open_exposure(conn: aiosqlite.Connection) -> float:
+async def total_open_exposure(conn: aiosqlite.Connection, source: str = "paper_live") -> float:
     cur = await conn.execute(
         "SELECT COALESCE(SUM(size * COALESCE(fill_price, limit_price)), 0) "
-        "FROM trades WHERE closed_at IS NULL AND is_paper = 1"
+        "FROM trades WHERE closed_at IS NULL AND is_paper = 1 AND source = ?",
+        (source,),
     )
     row = await cur.fetchone()
     return float(row[0]) if row else 0.0
 
 
-async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int) -> float:
+async def daily_loss_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
     cur = await conn.execute(
-        "SELECT COALESCE(-SUM(MIN(pnl, 0)), 0) FROM trades WHERE closed_at >= ?",
-        (since_ts,),
+        "SELECT COALESCE(-SUM(MIN(pnl, 0)), 0) FROM trades WHERE closed_at >= ? AND source = ?",
+        (since_ts, source),
     )
     # SQLite doesn't have MIN as an aggregate-of-aggregates without subquery
     cur = await conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN pnl < 0 THEN -pnl ELSE 0 END), 0) "
-        "FROM trades WHERE closed_at >= ?",
-        (since_ts,),
+        "FROM trades WHERE closed_at >= ? AND source = ?",
+        (since_ts, source),
     )
     row = await cur.fetchone()
     return float(row[0]) if row else 0.0
 
 
-async def fetch_open_trades(conn: aiosqlite.Connection) -> list[OpenTradeRecord]:
+async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_live") -> list[OpenTradeRecord]:
     """Return all open (unclosed) paper trades with their market end_date_iso."""
     cur = await conn.execute(
         """
@@ -184,8 +188,9 @@ async def fetch_open_trades(conn: aiosqlite.Connection) -> list[OpenTradeRecord]
                 LIMIT 1
             ) AS end_date_iso
         FROM trades t
-        WHERE t.closed_at IS NULL
-        """
+        WHERE t.closed_at IS NULL AND t.source = ?
+        """,
+        (source,),
     )
     rows = await cur.fetchall()
     return [OpenTradeRecord(trade_id=r[0], condition_id=r[1], fill_price=r[2], size=r[3], slippage=r[4], end_date_iso=r[5]) for r in rows]
@@ -220,8 +225,8 @@ async def daily_api_cost_usd(conn: aiosqlite.Connection, since_ts: int) -> float
     return float(row[0]) if row else 0.0
 
 
-async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> None:
-    """Compute and upsert metrics for date_str (ISO format: '2026-04-27') into metrics_daily."""
+async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str, source: str = "paper_live") -> None:
+    """Compute and upsert metrics for date_str/source into metrics_daily."""
     d = date.fromisoformat(date_str)
     # Use local midnight so trade timestamps (which use time.time()) align with the date window
     day_start = int(datetime(d.year, d.month, d.day).timestamp())
@@ -235,8 +240,9 @@ async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> No
         WHERE t.closed_at >= ? AND t.closed_at < ?
           AND t.outcome IN ('YES', 'NO')
           AND t.is_paper = 1
+          AND t.source = ?
         """,
-        (day_start, day_end),
+        (day_start, day_end, source),
     )
     rows = await cur.fetchall()
 
@@ -261,27 +267,29 @@ async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str) -> No
     await conn.execute(
         """
         INSERT INTO metrics_daily
-            (date, win_rate, sharpe, max_drawdown, profit_factor, brier_score, n_trades, pnl_usd, api_cost_usd)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(date) DO UPDATE SET
+            (date, source, win_rate, sharpe, max_drawdown, profit_factor,
+             brier_score, n_trades, pnl_usd, api_cost_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date, source) DO UPDATE SET
             win_rate=excluded.win_rate, sharpe=excluded.sharpe, max_drawdown=excluded.max_drawdown,
             profit_factor=excluded.profit_factor, brier_score=excluded.brier_score,
             n_trades=excluded.n_trades, pnl_usd=excluded.pnl_usd, api_cost_usd=excluded.api_cost_usd
         """,
-        (date_str, wr, sr, dd, pf, bs, n_trades, pnl_total, api_cost),
+        (date_str, source, wr, sr, dd, pf, bs, n_trades, pnl_total, api_cost),
     )
     await conn.commit()
 
 
-async def acceptance_criteria_met(conn: aiosqlite.Connection) -> tuple[bool, str]:
-    """Check if all-time paper trading meets the live-trading gate (50 trades, >60% win, Brier <0.25)."""
+async def acceptance_criteria_met(conn: aiosqlite.Connection, source: str = "paper_live") -> tuple[bool, str]:
+    """Check whether a trade source meets the paper gate (50 trades, >60% win, Brier <0.25)."""
     cur = await conn.execute(
         """
         SELECT t.pnl, p.p_model, t.outcome
         FROM trades t
         LEFT JOIN predictions p ON t.prediction_id = p.id
-        WHERE t.outcome IN ('YES', 'NO') AND t.is_paper = 1
-        """
+        WHERE t.outcome IN ('YES', 'NO') AND t.is_paper = 1 AND t.source = ?
+        """,
+        (source,),
     )
     rows = await cur.fetchall()
 
@@ -303,14 +311,14 @@ async def acceptance_criteria_met(conn: aiosqlite.Connection) -> tuple[bool, str
     return True, ""
 
 
-async def recent_daily_metrics(conn: aiosqlite.Connection, days: int = 7) -> list[dict]:
-    """Return the most recent `days` rows from metrics_daily, newest first."""
+async def recent_daily_metrics(conn: aiosqlite.Connection, days: int = 7, source: str = "paper_live") -> list[dict]:
+    """Return the most recent `days` rows for a source from metrics_daily, newest first."""
     from datetime import date, timedelta
     cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
     cur = await conn.execute(
         "SELECT date, win_rate, brier_score, n_trades, pnl_usd, sharpe, api_cost_usd "
-        "FROM metrics_daily WHERE date >= ? ORDER BY date DESC",
-        (cutoff,),
+        "FROM metrics_daily WHERE date >= ? AND source = ? ORDER BY date DESC",
+        (cutoff, source),
     )
     rows = await cur.fetchall()
     return [

@@ -92,4 +92,6 @@ Check status at any time:
 scripts/paper-daemon status
 ```
 
+Status reports `paper_live` trades and metrics only. Backtest rows are tagged as `backtest` and do not satisfy the paper-live acceptance gate.
+
 Live trading remains out of scope for v1. Do not change `RuntimeSettings.live_trading_enabled`; it must continue returning `False` even if `LIVE_TRADING=true` appears in the environment.
