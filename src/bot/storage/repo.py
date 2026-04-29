@@ -391,6 +391,7 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
             t.id,
             t.condition_id,
             t.token_id,
+            t.side,
             t.fill_price,
             t.size,
             t.slippage,
@@ -417,7 +418,7 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
     return [
         OpenTradeRecord(
             trade_id=r[0], condition_id=r[1], token_id=r[2],
-            fill_price=r[3], size=r[4], slippage=r[5], end_date_iso=r[6], question=r[7],
+            side=r[3], fill_price=r[4], size=r[5], slippage=r[6], end_date_iso=r[7], question=r[8],
         )
         for r in rows
     ]

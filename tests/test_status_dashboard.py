@@ -30,6 +30,29 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+def _fake_polymarket_client(mark: float | None = 0.5):
+    from bot.polymarket.client import OrderBookSnapshot
+
+    class FakePolymarketClient:
+        def __init__(self, *args, **kwargs):
+            self.closed = False
+
+        async def get_orderbook(self, token_id: str) -> OrderBookSnapshot:
+            if mark is None:
+                return OrderBookSnapshot(token_id=token_id, bids=[], asks=[], timestamp=0)
+            return OrderBookSnapshot(
+                token_id=token_id,
+                bids=[(mark - 0.01, 100)],
+                asks=[(mark + 0.01, 100)],
+                timestamp=0,
+            )
+
+        async def close(self) -> None:
+            self.closed = True
+
+    return FakePolymarketClient
+
+
 async def _settled_trade(conn, *, pnl: float, p_model: float, outcome: str) -> None:
     pred = Prediction(condition_id="cx", token_id="tx", p_model=p_model, p_market=0.5, edge=0.1)
     pid = await insert_prediction(conn, pred)
@@ -160,6 +183,7 @@ async def test_status_prints_open_paper_position_count_and_exposure(tmp_path, mo
 
     monkeypatch.setenv("BOT_DB_PATH", str(db_path))
     monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setattr("bot.daemon.PolymarketClient", _fake_polymarket_client(0.5), raising=False)
 
     await async_main(["--status"])
     out = capsys.readouterr().out
@@ -196,6 +220,7 @@ async def test_fetch_open_trades_includes_question(db):
     records = await fetch_open_trades(db)
     assert len(records) == 1
     assert records[0].question == "Will this market resolve Yes?"
+    assert records[0].side == "BUY"
 
 
 # ---------------------------------------------------------------------------
@@ -228,12 +253,45 @@ async def test_status_shows_open_position_question_and_end_date(tmp_path, monkey
 
     monkeypatch.setenv("BOT_DB_PATH", str(db_path))
     monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setattr("bot.daemon.PolymarketClient", _fake_polymarket_client(0.55), raising=False)
 
     await async_main(["--status"])
     out = capsys.readouterr().out
 
     assert "Will the featured candidate win?" in out
     assert "2026-05-15" in out
+
+
+async def test_status_marks_open_position_to_market(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    await insert_trade(
+        conn,
+        Trade(
+            condition_id="mark-cx",
+            token_id="mark-tx",
+            side="BUY",
+            size=100,
+            limit_price=0.50,
+            fill_price=0.50,
+        ),
+    )
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setattr("bot.daemon.PolymarketClient", _fake_polymarket_client(0.63), raising=False)
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "entry" in out.lower()
+    assert "mark" in out.lower()
+    assert "u_pnl" in out.lower()
+    assert "0.630" in out
+    assert "13.00" in out
 
 
 # ---------------------------------------------------------------------------

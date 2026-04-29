@@ -20,6 +20,7 @@ from retrain import retrain, retrain_needed  # noqa: E402
 from bot.config import load_settings  # noqa: E402
 from bot.mock_data import MockPolymarketClient  # noqa: E402
 from bot.orchestrator import run_once, summary_to_json  # noqa: E402
+from bot.polymarket.client import PolymarketClient  # noqa: E402
 from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # noqa: E402
 from bot.storage.db import open_db  # noqa: E402
 from bot.storage.repo import (  # noqa: E402
@@ -207,7 +208,26 @@ def run_retrain_pipeline(settings) -> dict:
     return retrain(df, model_path=model_path)
 
 
-async def _print_status(conn) -> None:
+async def _open_trade_mark(market_client, trade) -> tuple[float | None, float | None]:
+    if market_client is None or trade.fill_price is None:
+        return None, None
+    try:
+        book = await market_client.get_orderbook(trade.token_id)
+    except Exception as exc:
+        log.warning("could not mark open trade %s to market: %s", trade.trade_id, exc)
+        return None, None
+    mark = book.mid
+    if mark is None:
+        return None, None
+    side = (trade.side or "BUY").upper()
+    if side == "SELL":
+        unrealized_pnl = (trade.fill_price - mark) * trade.size
+    else:
+        unrealized_pnl = (mark - trade.fill_price) * trade.size
+    return mark, unrealized_pnl
+
+
+async def _print_status(conn, *, settings=None, market_client=None) -> None:
     rows = await recent_daily_metrics(conn, days=7)
     print("=== Recent paper-live daily metrics (last 7 days) ===")
     if not rows:
@@ -242,17 +262,41 @@ async def _print_status(conn) -> None:
     if open_trades:
         from datetime import UTC, datetime
         now = datetime.now(UTC)
-        print(f"  {'question':<45} {'price':>6} {'exp$':>7} {'resolves':<12} {'days':>5}")
-        for t in open_trades:
-            q = (t.question or "")[:44]
-            price = t.fill_price or 0.0
-            exp = (t.size or 0.0) * price
-            end = (t.end_date_iso or "")[:10]
-            try:
-                days = (datetime.fromisoformat(t.end_date_iso.replace("Z", "+00:00")).replace(tzinfo=UTC) - now).days if t.end_date_iso else -1
-            except (ValueError, AttributeError):
-                days = -1
-            print(f"  {q:<45} {price:>6.3f} {exp:>7.2f} {end:<12} {days:>5}")
+        owns_market_client = False
+        if market_client is None and settings is not None:
+            market_client = PolymarketClient(
+                host=settings.clob_host,
+                gamma_host=settings.gamma_host,
+                timeout=5.0,
+                max_retries=1,
+            )
+            owns_market_client = True
+        try:
+            print(
+                f"  {'question':<45} {'side':<4} {'entry':>6} {'mark':>6} "
+                f"{'u_pnl':>8} {'exp$':>7} {'resolves':<12} {'days':>5}"
+            )
+            for t in open_trades:
+                q = (t.question or "")[:44]
+                entry = t.fill_price or 0.0
+                mark, unrealized_pnl = await _open_trade_mark(market_client, t)
+                mark_str = f"{mark:>6.3f}" if mark is not None else f"{'n/a':>6}"
+                pnl_str = f"{unrealized_pnl:>8.2f}" if unrealized_pnl is not None else f"{'n/a':>8}"
+                exp = (t.size or 0.0) * entry
+                end = (t.end_date_iso or "")[:10]
+                try:
+                    days = (
+                        datetime.fromisoformat(t.end_date_iso.replace("Z", "+00:00")).replace(tzinfo=UTC) - now
+                    ).days if t.end_date_iso else -1
+                except (ValueError, AttributeError):
+                    days = -1
+                print(
+                    f"  {q:<45} {(t.side or 'BUY'):<4} {entry:>6.3f} {mark_str} "
+                    f"{pnl_str} {exp:>7.2f} {end:<12} {days:>5}"
+                )
+        finally:
+            if owns_market_client:
+                await market_client.close()
 
     import time
     day_start_ts = int(time.time()) - 86_400
@@ -287,7 +331,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     cleanup_signal_handlers = _install_signal_handlers(shutdown)
     try:
         if args.status:
-            await _print_status(conn)
+            await _print_status(conn, settings=settings)
             return 0
 
         if args.check_retrain:
@@ -322,7 +366,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                 f"{result['rows_skipped']} rows skipped"
             )
             await persist_daily_metrics(conn, date.today().isoformat(), source="backtest")
-            await _print_status(conn)
+            await _print_status(conn, settings=settings)
             return 0
 
         if args.once:
