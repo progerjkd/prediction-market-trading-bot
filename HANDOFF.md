@@ -35,7 +35,7 @@
 - `710575a` - merge PR #9 daemon pass exception recovery into `main`
 - `d8526f9` - `fix: tag mock-ai trades as source='mock'` (PR #10)
 - `e16998e` - merge PR #13: CI Node.js 24 action upgrades + scan_min_days filter
-- `7c6acdd` - `feat: show today's P&L and API spend in --status` (PR #14, open)
+- `de3d531` - merge PR #14: today's P&L and API spend in --status
 
 ## Current State
 
@@ -79,11 +79,11 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 ## Current Journal — 2026-04-28 PDT
 
-- Local branch is `main`. PRs #8–#13 merged. PR #14 open.
+- Local branch is `main`. PRs #8–#14 merged.
 - Working tree clean except runtime artifacts (`data/`, `.claude/worktrees/`, `failure_log.md`). Do not commit.
 - Supervised paper daemon running in tmux session `pm-bot-paper-live` (`data/paper-live.sqlite`).
 - Last verified test/lint state on main:
-  - `.venv/bin/pytest -q` → `422 passed` (on feat/status-today-pnl-and-api-spend; main is 420).
+  - `.venv/bin/pytest -q` → `422 passed`.
   - `.venv/bin/ruff check .` → clean.
 - PR #11 added `SCAN_FETCH_MAX_PAGES`; daemon was restarted with `SCAN_FETCH_MAX_PAGES=10`.
 - Latest observed pass fetched offsets through 450, scanned 500 markets, flagged 10, wrote 10 predictions, opened 2 paper trades, and settled 1 timeout trade.
@@ -93,7 +93,7 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
   - Recent skip diagnostics: `too_far_to_resolution=1715`, `wide_spread=25`, `decision_should_trade_false=20`, `orderbook_unavailable=15`, `low_volume=10`, `recently_flagged=8`, `already_open_position=4`.
 - We are closer to the target on throughput, but still waiting on settled YES/NO trades before the paper-live gate can pass.
 
-### Today's P&L + API spend in --status (PR #14, open)
+### Today's P&L + API spend in --status (de3d531, PR #14)
 
 - `_print_status` now shows a **"Today (last 24h)"** section: `pnl_usd` (sum of closed `paper_live` trade PnL since midnight) and `api_cost_usd` (sum of `api_spend` rows since midnight).
 - New `today_pnl_usd(conn, since_ts, source)` repo helper in `storage/repo.py`.
