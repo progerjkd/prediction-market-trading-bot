@@ -33,6 +33,7 @@
 - `1a4f294` - merge PR #7 risk-control stack into `main`
 - `b04e4f4` - `feat: oversample orderbooks for scan fill rate` (PR #8)
 - `710575a` - merge PR #9 daemon pass exception recovery into `main`
+- `d8526f9` - `fix: tag mock-ai trades as source='mock'` (PR #10)
 
 ## Current State
 
@@ -74,24 +75,26 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
-## Current Journal — 2026-04-28 17:28 PDT
+## Current Journal — 2026-04-28 17:49 PDT
 
-- Local branch is `main`. PRs #8 (scan oversampling) and #9 (daemon exception resilience) merged.
-- Working tree has only runtime/local artifacts:
-  - `.claude/skills/pm-compound/references/failure_log.md` modified by runtime activity.
-  - `.claude/worktrees/` and `data/` untracked. Do not commit.
-- Supervised paper daemon running in tmux session `pm-bot-paper-live`.
-- Current paper daemon status:
-  - STOP file absent: `data/PAPER_STOP`.
-  - Open paper positions: **1**; exposure: **$100.00**.
-  - Acceptance gate: not met — needs 50 settled YES/NO trades, currently has 0.
-  - Recent skip diagnostics: `too_far_to_resolution=1190`, `wide_spread=21`, `decision_should_trade_false=9`, `low_volume=7`, `orderbook_unavailable=6`, `recently_flagged=4`, `already_open_position=3`.
-  - One stale/open trade was timeout-closed after restart with `pnl=-12.70`; timeout outcomes do not count toward the YES/NO acceptance gate.
-- Last verified test/lint state:
-  - `.venv/bin/pytest -q` → `412 passed`.
+- Local branch is `main`. PRs #8–#11 merged.
+- Working tree clean except runtime artifacts (`data/`, `.claude/worktrees/`, `failure_log.md`). Do not commit.
+- Supervised paper daemon running in tmux session `pm-bot-paper-live` (`data/paper-live.sqlite`).
+- Last verified test/lint state on main:
+  - `.venv/bin/pytest -q` → `415 passed`.
   - `.venv/bin/ruff check .` → clean.
-- PR #9 was synced into `main` and the daemon was restarted, so the live process now includes pass-level exception recovery.
-- Next recommended build: deeper market discovery for near-resolution markets. Add configurable `SCAN_FETCH_MAX_PAGES` / `scan_fetch_max_pages`, pass it to `PolymarketClient.list_markets(..., max_pages=...)`, and test that `run_once()` can find eligible markets when early pages are dominated by `too_far_to_resolution`.
+- PR #11 added `SCAN_FETCH_MAX_PAGES`; daemon was restarted with `SCAN_FETCH_MAX_PAGES=10`.
+- First pass after restart fetched offsets through 450 (`scanned_markets=500`), flagged 10 markets, wrote 10 predictions, opened 2 paper trades, and settled 1 timeout trade. This is a clear throughput improvement over 250-market passes.
+- Current status after restart:
+  - Open positions: **3**; exposure: **$250.16**.
+  - Acceptance gate: not met — still 0 YES/NO settled trades of 50 needed.
+  - Recent skip diagnostics: `too_far_to_resolution=1715`, `wide_spread=25`, `decision_should_trade_false=20`, `orderbook_unavailable=15`, `low_volume=10`, `recently_flagged=8`, `already_open_position=4`.
+
+### mock-ai trade source fix (d8526f9, PR #10)
+
+- `_paper_execute_if_allowed` now accepts `mock_ai: bool = False`.
+- Trades written during `--mock-ai` runs get `source='mock'` instead of `source='paper_live'`, so they never count toward or pollute the paper-live acceptance gate.
+- 1 new test: `test_mock_ai_trades_written_with_source_mock` in `tests/test_orchestrator.py`.
 
 ## Important Context
 
@@ -265,6 +268,14 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 - The `3×` cap multiplier is intentionally internal (not exposed as an env var) — operators who need broader coverage should raise `--max-markets` / `MAX_MARKETS` instead.
 - Tests: `test_far_future_markets_do_not_consume_orderbook_scan_slots` and `test_wide_spread_markets_do_not_stop_scan_before_tradeable_candidates` in `tests/test_scan_metadata_prefilter.py`.
 
+### Configurable scan pagination depth (049fead, PR #11)
+
+- `RuntimeSettings.scan_fetch_max_pages` controls Gamma pagination depth for market discovery.
+- Env override: `SCAN_FETCH_MAX_PAGES`.
+- `run_once()` passes `max_pages=settings.scan_fetch_max_pages` into `PolymarketClient.list_markets()`.
+- Live supervised daemon is currently restarted with `SCAN_FETCH_MAX_PAGES=10`, producing 500 scanned markets per pass.
+- Tests: `tests/test_scan_max_pages.py`.
+
 ### Skip diagnostics and scan selection
 
 - `skip_events` records scan, decision, risk, sizing, execution, cooldown, dedup, and position-gate skips.
@@ -279,9 +290,10 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 ## Next Highest-Value Work
 
-1. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running and watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`. Bounded oversampling is now live; look for `flagged_markets` per pass to improve above the old ~1–3 range.
-2. **Feature retraining after paper run** — once enough fresh `paper_live` trades have settled, run `--check-retrain` to incorporate actual market behavior.
-3. Keep live trading unreachable in v1.
+1. **Monitor supervised paper daemon** — keep `pm-bot-paper-live` running with `SCAN_FETCH_MAX_PAGES=10`; watch `scripts/paper-daemon status` plus `data/logs/paper-live.log`.
+2. **Tune trade throughput conservatively** — open positions are increasing; if max positions becomes the next bottleneck, prefer waiting for settlements over raising risk limits.
+3. **Feature retraining after paper run** — once enough fresh `paper_live` YES/NO trades have settled, run `--check-retrain` to incorporate actual market behavior.
+4. Keep live trading unreachable in v1.
 
 ## Retrain Cadence
 
