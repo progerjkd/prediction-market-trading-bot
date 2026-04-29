@@ -153,15 +153,23 @@ async def _run_repeating(
     ws_task = asyncio.create_task(subscriber.run())
     try:
         while not shutdown.event.is_set():
-            summary = await run_once(
-                settings=settings,
-                conn=conn,
-                polymarket_client=MockPolymarketClient() if mock_ai else None,
-                max_markets=max_markets,
-                mock_ai=mock_ai,
-                scan_only=scan_only,
-                book_cache=book_cache,
-            )
+            try:
+                summary = await run_once(
+                    settings=settings,
+                    conn=conn,
+                    polymarket_client=MockPolymarketClient() if mock_ai else None,
+                    max_markets=max_markets,
+                    mock_ai=mock_ai,
+                    scan_only=scan_only,
+                    book_cache=book_cache,
+                )
+            except Exception:
+                log.exception("daemon pass failed; continuing after scan interval")
+                await _wait_for_shutdown(
+                    shutdown,
+                    timeout_seconds=settings.scan_interval_seconds,
+                )
+                continue
             log.info("daemon pass summary=%s", summary_to_json(summary))
             subscriber.update_tokens(summary.flagged_yes_tokens)
             if summary.halt_reason:
