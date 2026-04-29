@@ -31,6 +31,8 @@
 - `0b1a7bd` - `feat: prefilter scan metadata before orderbooks`
 - `1a6928e` - `feat: show open paper exposure in status`
 - `1a4f294` - merge PR #7 risk-control stack into `main`
+- `b04e4f4` - `feat: oversample orderbooks for scan fill rate` (PR #8)
+- `710575a` - merge PR #9 daemon pass exception recovery into `main`
 
 ## Current State
 
@@ -72,26 +74,24 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
-## Current Journal — 2026-04-28 16:55 PDT
+## Current Journal — 2026-04-28 17:28 PDT
 
-- Local branch is `feature/scan-oversampling`, branched from `main` after PR #7 merged.
-- Working tree has only runtime/local artifacts outside tracked source work:
-  - `.claude/skills/pm-compound/references/failure_log.md` modified by runtime postmortem/test activity.
-  - `.claude/worktrees/` untracked.
-  - `data/` untracked runtime DB/log/model data.
-- Do not commit runtime DB/log data. Do not revert the failure log unless explicitly requested.
-- Supervised paper daemon is still running in tmux session `pm-bot-paper-live`.
+- Local branch is `main`. PRs #8 (scan oversampling) and #9 (daemon exception resilience) merged.
+- Working tree has only runtime/local artifacts:
+  - `.claude/skills/pm-compound/references/failure_log.md` modified by runtime activity.
+  - `.claude/worktrees/` and `data/` untracked. Do not commit.
+- Supervised paper daemon running in tmux session `pm-bot-paper-live`.
 - Current paper daemon status:
   - STOP file absent: `data/PAPER_STOP`.
-  - Open paper positions: `1`.
-  - Open exposure: `$100.00`.
-  - Acceptance gate: not met, needs 50 settled trades and currently has 0.
-  - Recent skip diagnostics: `too_far_to_resolution=718`, `wide_spread=12`, `decision_should_trade_false=6`, `low_volume=3`, `already_open_position=2`.
+  - Open paper positions: **1**; exposure: **$100.00**.
+  - Acceptance gate: not met — needs 50 settled YES/NO trades, currently has 0.
+  - Recent skip diagnostics: `too_far_to_resolution=1190`, `wide_spread=21`, `decision_should_trade_false=9`, `low_volume=7`, `orderbook_unavailable=6`, `recently_flagged=4`, `already_open_position=3`.
+  - One stale/open trade was timeout-closed after restart with `pnl=-12.70`; timeout outcomes do not count toward the YES/NO acceptance gate.
 - Last verified test/lint state:
-  - `.venv/bin/pytest -q` -> `411 passed`.
-  - `.venv/bin/ruff check .` -> clean.
-  - `.venv/bin/python -m bot.daemon --once --paper --mock-ai --max-markets 1` -> exited 0; runtime DB state caused prediction/trade skip after flagging one mock market.
-- Bounded orderbook over-sampling is implemented on this branch. It keeps fetching orderbooks from metadata-valid markets until either `max_markets` tradeable candidates are found or `max_markets * 3` orderbook attempts are reached, then preserves spread-weighted `edge_proxy` ordering.
+  - `.venv/bin/pytest -q` → `412 passed`.
+  - `.venv/bin/ruff check .` → clean.
+- PR #9 was synced into `main` and the daemon was restarted, so the live process now includes pass-level exception recovery.
+- Next recommended build: deeper market discovery for near-resolution markets. Add configurable `SCAN_FETCH_MAX_PAGES` / `scan_fetch_max_pages`, pass it to `PolymarketClient.list_markets(..., max_pages=...)`, and test that `run_once()` can find eligible markets when early pages are dominated by `too_far_to_resolution`.
 
 ## Important Context
 
@@ -257,7 +257,7 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 - Legacy DB migration adds source columns, backfills `bt_%` trades to `backtest`, and removes stale paper-live metric rows whose counts no longer match paper-live trades.
 - `--status` labels the gate as the paper-live acceptance gate.
 
-### Bounded orderbook over-sampling (feature/scan-oversampling)
+### Bounded orderbook over-sampling (b04e4f4)
 
 - After metadata prefiltering, `run_once()` iterates metadata-valid markets in ranked order and fetches orderbooks one at a time.
 - Loop exits when either `len(flagged) >= max_markets` **or** `orderbook_attempts >= max_markets * 3` (hard cap prevents runaway HTTP calls in a single pass).
