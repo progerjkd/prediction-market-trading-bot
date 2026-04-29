@@ -79,7 +79,7 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 ## Current Journal — 2026-04-28 PDT
 
-- Local branch is `main`. PRs #8–#14 merged.
+- Local branch is `main`. PRs #8–#14 merged. PR #15 open.
 - Working tree clean except runtime artifacts (`data/`, `.claude/worktrees/`, `failure_log.md`). Do not commit.
 - Supervised paper daemon running in tmux session `pm-bot-paper-live` (`data/paper-live.sqlite`).
 - Last verified test/lint state on main:
@@ -92,6 +92,18 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
   - Acceptance gate: not met — still 0 YES/NO settled trades of 50 needed.
   - Recent skip diagnostics: `too_far_to_resolution=1715`, `wide_spread=25`, `decision_should_trade_false=20`, `orderbook_unavailable=15`, `low_volume=10`, `recently_flagged=8`, `already_open_position=4`.
 - We are closer to the target on throughput, but still waiting on settled YES/NO trades before the paper-live gate can pass.
+
+### Acceptance gate progress display (1b5b200, PR #15, open)
+
+- `--status` now shows a structured progress block instead of a flat line:
+  ```
+  === Paper-live acceptance gate: NOT MET ===
+    progress:  3 / 50 settled trades
+    win_rate:  66.7%    (need > 60.0%)
+    brier:     0.222    (need < 0.250)
+  ```
+- New `acceptance_gate_stats(conn)` repo helper returns raw `{n, needed, win_rate, brier}` without pass/fail logic.
+- 2 new tests in `tests/test_status_dashboard.py`. 424 tests pass.
 
 ### Today's P&L + API spend in --status (de3d531, PR #14)
 
