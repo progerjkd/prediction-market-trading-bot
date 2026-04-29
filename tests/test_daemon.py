@@ -114,6 +114,48 @@ async def test_daemon_repeating_loop_exits_on_halt_summary(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_daemon_repeating_loop_recovers_after_pass_exception(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    shutdown = _DaemonShutdown()
+    settings = RuntimeSettings(
+        db_path=db_path,
+        stop_file=tmp_path / "STOP",
+        scan_interval_seconds=0,
+    )
+    calls = 0
+
+    async def fake_run_once(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("temporary network failure")
+        shutdown.request("test complete")
+        return RunSummary()
+
+    monkeypatch.setattr("bot.daemon.run_once", fake_run_once)
+    caplog.set_level(logging.ERROR, logger="bot.daemon")
+
+    try:
+        code = await _run_repeating(
+            settings=settings,
+            conn=conn,
+            shutdown=shutdown,
+            max_markets=1,
+            mock_ai=True,
+            scan_only=False,
+            heartbeat_seconds=60.0,
+            stop_poll_seconds=60.0,
+        )
+
+        assert code == 0
+        assert calls == 2
+        assert "daemon pass failed" in caplog.text
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_daemon_stop_file_watcher_prevents_next_pass(tmp_path, monkeypatch):
     db_path = tmp_path / "bot.sqlite"
     stop_file = tmp_path / "STOP"
