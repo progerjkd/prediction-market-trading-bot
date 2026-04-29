@@ -53,6 +53,20 @@ Five Claude skills in `.claude/skills/pm-{scan,research,predict,risk,compound}/`
 - `paper/simulator.py` — walk-the-book fill simulation; returns `Fill(filled_size, avg_price, unfilled_size, slippage)`.
 - `budgets.py` — stateless `halt_reason()` that checks STOP file, daily loss, drawdown, and API cost.
 - `storage/db.py` — `open_db()` applies `SCHEMA` idempotently (WAL mode, foreign keys). Additive column migrations are in `_ensure_markets_flagged_columns`.
+- `storage/models.py` — dataclasses for all persisted records (`FlaggedMarket`, `Trade`, `Prediction`, `SkipEvent`, `Lesson`, `ApiSpend`, …).
+- `storage/repo.py` — all async SQLite query functions. Query functions like `fetch_open_trades`, `acceptance_criteria_met`, `recent_daily_metrics` are called from `daemon.py` for `--status`.
+- `metrics.py` — `persist_daily_metrics()` and `acceptance_criteria_met()`. Called at the end of every `run_once()` pass. The acceptance gate requires ≥50 settled `paper_live` YES/NO trades with win_rate>60% and brier<0.25.
+
+### Key env vars for daemon tuning
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `SCAN_FETCH_MAX_PAGES` | `5` | Gamma API pages per pass (50 markets/page) |
+| `SCAN_MIN_DAYS` | `1` | Skip markets expiring in fewer than N days |
+| `SCAN_MAX_DAYS` | `30` | Skip markets expiring in more than N days |
+| `MAX_MARKETS` | `10` | Max flagged markets per pass |
+| `BOT_DB_PATH` | `data/bot.sqlite` | SQLite path (supervised daemon uses `data/paper-live.sqlite`) |
+| `STOP_FILE` | `data/STOP` | Kill-switch path |
 
 ### Key invariants
 
