@@ -18,7 +18,7 @@ class _OneMarketClient:
         self.volume_24h = volume_24h
         self.liquidity = liquidity
 
-    async def list_markets(self, limit: int = 100, active_only: bool = True):
+    async def list_markets(self, limit: int = 100, active_only: bool = True, max_pages: int = 5):
         return [
             Market(
                 condition_id="skip-cond-1",

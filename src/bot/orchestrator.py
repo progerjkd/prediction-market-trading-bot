@@ -125,7 +125,11 @@ async def run_once(
         settled = await _settle_expired_trades(conn, client, settings=settings)
 
         fetch_limit = max(settings.scan_fetch_limit, max_markets)
-        markets = await client.list_markets(limit=fetch_limit, active_only=True)
+        markets = await client.list_markets(
+            limit=fetch_limit,
+            active_only=True,
+            max_pages=settings.scan_fetch_max_pages,
+        )
         markets_ranked = sorted(markets, key=lambda m: m.volume_24h * m.liquidity, reverse=True)
 
         dedup_cutoff = int(time.time()) - settings.scan_interval_seconds

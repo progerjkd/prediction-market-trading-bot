@@ -20,7 +20,7 @@ class FakePolymarketClient:
         self.execution_orderbook = execution_orderbook
         self.orderbook_calls = 0
 
-    async def list_markets(self, limit: int = 100, active_only: bool = True):
+    async def list_markets(self, limit: int = 100, active_only: bool = True, max_pages: int = 5):
         return [
             Market(
                 condition_id="cond-1",
@@ -52,7 +52,7 @@ class FakePolymarketClient:
 
 
 class FakeResolvedMarketClient(FakePolymarketClient):
-    async def list_markets(self, limit: int = 100, active_only: bool = True):
+    async def list_markets(self, limit: int = 100, active_only: bool = True, max_pages: int = 5):
         if active_only:
             return []
         return [
