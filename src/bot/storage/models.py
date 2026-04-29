@@ -134,6 +134,7 @@ class OpenTradeRecord:
     slippage: float | None
     end_date_iso: str | None
     question: str | None = None
+    side: str = "BUY"
 
 
 @dataclass
