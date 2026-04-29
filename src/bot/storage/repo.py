@@ -452,6 +452,15 @@ async def daily_api_cost_usd(conn: aiosqlite.Connection, since_ts: int) -> float
     return float(row[0]) if row else 0.0
 
 
+async def today_pnl_usd(conn: aiosqlite.Connection, since_ts: int, source: str = "paper_live") -> float:
+    cur = await conn.execute(
+        "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE closed_at >= ? AND is_paper = 1 AND source = ?",
+        (since_ts, source),
+    )
+    row = await cur.fetchone()
+    return float(row[0]) if row else 0.0
+
+
 async def persist_daily_metrics(conn: aiosqlite.Connection, date_str: str, source: str = "paper_live") -> None:
     """Compute and upsert metrics for date_str/source into metrics_daily."""
     d = date.fromisoformat(date_str)
