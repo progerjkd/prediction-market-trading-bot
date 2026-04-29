@@ -34,3 +34,44 @@ jobs:
 
       - name: Test
         run: pytest -q
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          install -m 600 -D /dev/null ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull latest code and install dependencies
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "cd ${{ secrets.DEPLOY_PATH }} \
+             && git pull --ff-only origin main \
+             && uv pip install --system -e '.[dev]'"
+
+      - name: Restart paper daemon
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "cd ${{ secrets.DEPLOY_PATH }} \
+             && BOT_DB_PATH=data/paper-live.sqlite \
+                STOP_FILE=data/PAPER_STOP \
+                PM_BOT_TMUX_SESSION=pm-bot-paper-live \
+                scripts/paper-daemon stop \
+             && sleep 15 \
+             && BOT_DB_PATH=data/paper-live.sqlite \
+                STOP_FILE=data/PAPER_STOP \
+                PM_BOT_TMUX_SESSION=pm-bot-paper-live \
+                scripts/paper-daemon clear-stop \
+             && BOT_DB_PATH=data/paper-live.sqlite \
+                STOP_FILE=data/PAPER_STOP \
+                PM_BOT_TMUX_SESSION=pm-bot-paper-live \
+                SCAN_FETCH_MAX_PAGES=10 \
+                scripts/paper-daemon start"
