@@ -28,6 +28,7 @@ def filter_tradeable_markets(
     markets: list[MarketCandidate],
     *,
     min_volume: float = 200.0,
+    min_days_to_resolution: int = 1,
     max_days_to_resolution: int = 30,
     max_spread: float = 0.05,
     min_liquidity: float = 50.0,
@@ -41,6 +42,8 @@ def filter_tradeable_markets(
         if market.volume_24h < min_volume:
             continue
         if days > max_days_to_resolution:
+            continue
+        if days < min_days_to_resolution:
             continue
         if market.spread > max_spread:
             continue
