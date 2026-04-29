@@ -234,3 +234,54 @@ async def test_status_shows_open_position_question_and_end_date(tmp_path, monkey
 
     assert "Will the featured candidate win?" in out
     assert "2026-05-15" in out
+
+
+# ---------------------------------------------------------------------------
+# --status shows today's API spend and P&L
+# ---------------------------------------------------------------------------
+
+
+async def test_status_shows_today_api_spend(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+    from bot.storage.models import ApiSpend
+    from bot.storage.repo import insert_api_spend
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    await insert_api_spend(conn, ApiSpend(provider="anthropic", cost_usd=1.23, model="claude-sonnet-4-6"))
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "api" in out.lower()
+    assert "1.23" in out
+
+
+async def test_status_shows_today_pnl(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    await _settled_trade_in_db(conn, pnl=7.50, p_model=0.7, outcome="YES")
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "today" in out.lower()
+    assert "7.50" in out
+
+
+async def _settled_trade_in_db(conn, *, pnl: float, p_model: float, outcome: str) -> None:
+    pred = Prediction(condition_id="cx", token_id="tx", p_model=p_model, p_market=0.5, edge=0.1)
+    pid = await insert_prediction(conn, pred)
+    t = Trade(condition_id="cx", token_id="tx", side="BUY", size=100, limit_price=0.5, fill_price=0.5, prediction_id=pid)
+    tid = await insert_trade(conn, t)
+    await close_trade(conn, tid, pnl=pnl, outcome=outcome)

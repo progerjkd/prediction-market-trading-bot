@@ -24,10 +24,12 @@ from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # n
 from bot.storage.db import open_db  # noqa: E402
 from bot.storage.repo import (  # noqa: E402
     acceptance_criteria_met,
+    daily_api_cost_usd,
     fetch_open_trades,
     persist_daily_metrics,
     recent_daily_metrics,
     skip_reason_counts,
+    today_pnl_usd,
     total_open_exposure,
 )
 
@@ -244,6 +246,15 @@ async def _print_status(conn) -> None:
             except (ValueError, AttributeError):
                 days = -1
             print(f"  {q:<45} {price:>6.3f} {exp:>7.2f} {end:<12} {days:>5}")
+
+    import time
+    day_start_ts = int(time.time()) - 86_400
+    api_cost = await daily_api_cost_usd(conn, since_ts=day_start_ts)
+    pnl = await today_pnl_usd(conn, since_ts=day_start_ts)
+    print()
+    print("=== Today (last 24h) ===")
+    print(f"  pnl_usd:      {pnl:>8.2f}")
+    print(f"  api_cost_usd: {api_cost:>8.2f}")
 
     skip_counts = await skip_reason_counts(conn, since_seconds_ago=86_400)
     print()
