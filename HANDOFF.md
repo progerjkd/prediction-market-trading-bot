@@ -34,6 +34,7 @@
 - `b04e4f4` - `feat: oversample orderbooks for scan fill rate` (PR #8)
 - `710575a` - merge PR #9 daemon pass exception recovery into `main`
 - `d8526f9` - `fix: tag mock-ai trades as source='mock'` (PR #10)
+- `e16998e` - merge PR #13: CI Node.js 24 action upgrades + scan_min_days filter
 
 ## Current State
 
@@ -75,13 +76,13 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
-## Current Journal — 2026-04-28 18:05 PDT
+## Current Journal — 2026-04-28 PDT
 
-- Local branch is `main`. PRs #8–#11 merged.
+- Local branch is `main`. PRs #8–#13 merged.
 - Working tree clean except runtime artifacts (`data/`, `.claude/worktrees/`, `failure_log.md`). Do not commit.
 - Supervised paper daemon running in tmux session `pm-bot-paper-live` (`data/paper-live.sqlite`).
 - Last verified test/lint state on main:
-  - `.venv/bin/pytest -q` → `415 passed`.
+  - `.venv/bin/pytest -q` → `420 passed`.
   - `.venv/bin/ruff check .` → clean.
 - PR #11 added `SCAN_FETCH_MAX_PAGES`; daemon was restarted with `SCAN_FETCH_MAX_PAGES=10`.
 - Latest observed pass fetched offsets through 450, scanned 500 markets, flagged 10, wrote 10 predictions, opened 2 paper trades, and settled 1 timeout trade.
@@ -90,6 +91,12 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
   - Acceptance gate: not met — still 0 YES/NO settled trades of 50 needed.
   - Recent skip diagnostics: `too_far_to_resolution=1715`, `wide_spread=25`, `decision_should_trade_false=20`, `orderbook_unavailable=15`, `low_volume=10`, `recently_flagged=8`, `already_open_position=4`.
 - We are closer to the target on throughput, but still waiting on settled YES/NO trades before the paper-live gate can pass.
+
+### CI Node.js 24 + scan_min_days filter (PR #13)
+
+- **CI**: Upgraded `actions/checkout@v4→v6`, `actions/setup-python@v5→v6`, `astral-sh/setup-uv@v5→v7`. All three now run natively on Node.js 24; Node.js 20 deprecation annotation eliminated.
+- **`scan_min_days`**: New `RuntimeSettings` field (default 1, env `SCAN_MIN_DAYS`). Markets expiring in fewer than `scan_min_days` days are skipped as `too_close_to_resolution` before any orderbook slot is spent. Wired through `_market_metadata_skip_reason` and `filter_tradeable_markets`. Complements the existing `scan_max_days` / `SCAN_MAX_DAYS` upper bound.
+- 2 new tests in `tests/test_scan_metadata_prefilter.py`.
 
 ### mock-ai trade source fix (d8526f9, PR #10)
 
