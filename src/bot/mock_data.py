@@ -10,7 +10,12 @@ class MockPolymarketClient:
     async def close(self) -> None:
         return None
 
-    async def list_markets(self, limit: int = 100, active_only: bool = True) -> list[Market]:
+    async def list_markets(
+        self,
+        limit: int = 100,
+        active_only: bool = True,
+        max_pages: int = 5,
+    ) -> list[Market]:
         return [
             Market(
                 condition_id="mock-cond-1",

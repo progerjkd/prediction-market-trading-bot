@@ -38,7 +38,7 @@ async def test_fetch_limit_used_instead_of_max_markets_as_page_size(tmp_path):
                    mock_ai=True, scan_only=True, max_markets=3)
 
     # list_markets should be called with limit=50 (scan_fetch_limit), not limit=3 (max_markets)
-    client.list_markets.assert_called_once_with(limit=50, active_only=True)
+    client.list_markets.assert_called_once_with(limit=50, active_only=True, max_pages=5)
     await conn.close()
 
 
@@ -59,7 +59,7 @@ async def test_fetch_limit_at_least_max_markets(tmp_path):
                    mock_ai=True, scan_only=True, max_markets=100)
 
     # max_markets=100 > scan_fetch_limit=10 → fetch 100
-    client.list_markets.assert_called_once_with(limit=100, active_only=True)
+    client.list_markets.assert_called_once_with(limit=100, active_only=True, max_pages=5)
     await conn.close()
 
 

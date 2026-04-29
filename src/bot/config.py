@@ -49,6 +49,7 @@ class RuntimeSettings:
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
     scan_fetch_limit: int = 50
+    scan_fetch_max_pages: int = 5
     position_timeout_days: int = 30
     ws_orderbook_max_age_seconds: int = 300
     stop_loss_pct: float = 0.0
@@ -86,6 +87,8 @@ class RuntimeSettings:
             errors.append(f"scan_max_days must be positive, got {self.scan_max_days}")
         if self.scan_interval_seconds < 0:
             errors.append(f"scan_interval_seconds must be >= 0, got {self.scan_interval_seconds}")
+        if self.scan_fetch_max_pages <= 0:
+            errors.append(f"scan_fetch_max_pages must be positive, got {self.scan_fetch_max_pages}")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -121,6 +124,7 @@ def load_settings() -> RuntimeSettings:
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
         scan_fetch_limit=_env_int("SCAN_FETCH_LIMIT", 50),
+        scan_fetch_max_pages=_env_int("SCAN_FETCH_MAX_PAGES", 5),
         position_timeout_days=_env_int("POSITION_TIMEOUT_DAYS", 30),
         ws_orderbook_max_age_seconds=_env_int("WS_ORDERBOOK_MAX_AGE_SECONDS", 300),
         stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.0),
