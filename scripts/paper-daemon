@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="${PM_BOT_TMUX_SESSION:-pm-bot}"
-DB_PATH="${BOT_DB_PATH:-data/bot.sqlite}"
+DB_PATH="${BOT_DB_PATH:-data/paper-live.sqlite}"
 STOP_FILE="${STOP_FILE:-data/STOP}"
 LOG_FILE="${PM_BOT_LOG_FILE:-data/logs/paper-daemon.log}"
 MAX_MARKETS="${MAX_MARKETS:-10}"

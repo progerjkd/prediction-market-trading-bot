@@ -133,6 +133,7 @@ class OpenTradeRecord:
     size: float
     slippage: float | None
     end_date_iso: str | None
+    question: str | None = None
 
 
 @dataclass

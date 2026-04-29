@@ -167,3 +167,70 @@ async def test_status_prints_open_paper_position_count_and_exposure(tmp_path, mo
     assert "open paper positions" in out.lower()
     assert "1" in out
     assert "50.00" in out
+
+
+# ---------------------------------------------------------------------------
+# fetch_open_trades includes question
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_open_trades_includes_question(db):
+    from bot.storage.models import FlaggedMarket
+    from bot.storage.repo import fetch_open_trades, insert_flagged_market
+
+    await insert_trade(
+        db,
+        Trade(condition_id="cq-1", token_id="tq-1", side="BUY", size=100, limit_price=0.5, fill_price=0.5),
+    )
+    await insert_flagged_market(
+        db,
+        FlaggedMarket(
+            condition_id="cq-1", yes_token="tq-1", no_token="nq-1",
+            mid_price=0.5, spread=0.04, volume_24h=1000.0,
+            question="Will this market resolve Yes?",
+            end_date_iso="2026-06-01T00:00:00Z",
+            liquidity=500.0, edge_proxy=0.05,
+        ),
+    )
+
+    records = await fetch_open_trades(db)
+    assert len(records) == 1
+    assert records[0].question == "Will this market resolve Yes?"
+
+
+# ---------------------------------------------------------------------------
+# --status shows position detail table
+# ---------------------------------------------------------------------------
+
+
+async def test_status_shows_open_position_question_and_end_date(tmp_path, monkeypatch, capsys):
+    from bot.daemon import async_main
+    from bot.storage.models import FlaggedMarket
+    from bot.storage.repo import insert_flagged_market
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    await insert_trade(
+        conn,
+        Trade(condition_id="cq-2", token_id="tq-2", side="BUY", size=200, limit_price=0.55, fill_price=0.55),
+    )
+    await insert_flagged_market(
+        conn,
+        FlaggedMarket(
+            condition_id="cq-2", yes_token="tq-2", no_token="nq-2",
+            mid_price=0.55, spread=0.04, volume_24h=2000.0,
+            question="Will the featured candidate win?",
+            end_date_iso="2026-05-15T00:00:00Z",
+            liquidity=800.0, edge_proxy=0.06,
+        ),
+    )
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "Will the featured candidate win?" in out
+    assert "2026-05-15" in out

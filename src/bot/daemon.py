@@ -24,7 +24,7 @@ from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # n
 from bot.storage.db import open_db  # noqa: E402
 from bot.storage.repo import (  # noqa: E402
     acceptance_criteria_met,
-    open_positions_count,
+    fetch_open_trades,
     persist_daily_metrics,
     recent_daily_metrics,
     skip_reason_counts,
@@ -224,12 +224,26 @@ async def _print_status(conn) -> None:
     else:
         print(f"=== Paper-live acceptance gate: NOT MET — {reason} ===")
 
-    open_count = await open_positions_count(conn)
+    open_trades = await fetch_open_trades(conn)
     open_exposure = await total_open_exposure(conn)
     print()
     print("=== Open paper positions ===")
-    print(f"  count: {open_count}")
+    print(f"  count: {len(open_trades)}")
     print(f"  exposure_usd: {open_exposure:.2f}")
+    if open_trades:
+        from datetime import UTC, datetime
+        now = datetime.now(UTC)
+        print(f"  {'question':<45} {'price':>6} {'exp$':>7} {'resolves':<12} {'days':>5}")
+        for t in open_trades:
+            q = (t.question or "")[:44]
+            price = t.fill_price or 0.0
+            exp = (t.size or 0.0) * price
+            end = (t.end_date_iso or "")[:10]
+            try:
+                days = (datetime.fromisoformat(t.end_date_iso.replace("Z", "+00:00")).replace(tzinfo=UTC) - now).days if t.end_date_iso else -1
+            except (ValueError, AttributeError):
+                days = -1
+            print(f"  {q:<45} {price:>6.3f} {exp:>7.2f} {end:<12} {days:>5}")
 
     skip_counts = await skip_reason_counts(conn, since_seconds_ago=86_400)
     print()

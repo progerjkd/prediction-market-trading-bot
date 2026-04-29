@@ -400,7 +400,14 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
                 WHERE mf.condition_id = t.condition_id
                 ORDER BY mf.flagged_at DESC
                 LIMIT 1
-            ) AS end_date_iso
+            ) AS end_date_iso,
+            (
+                SELECT mf.question
+                FROM markets_flagged mf
+                WHERE mf.condition_id = t.condition_id
+                ORDER BY mf.flagged_at DESC
+                LIMIT 1
+            ) AS question
         FROM trades t
         WHERE t.closed_at IS NULL AND t.source = ?
         """,
@@ -410,7 +417,7 @@ async def fetch_open_trades(conn: aiosqlite.Connection, source: str = "paper_liv
     return [
         OpenTradeRecord(
             trade_id=r[0], condition_id=r[1], token_id=r[2],
-            fill_price=r[3], size=r[4], slippage=r[5], end_date_iso=r[6],
+            fill_price=r[3], size=r[4], slippage=r[5], end_date_iso=r[6], question=r[7],
         )
         for r in rows
     ]
