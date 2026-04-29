@@ -75,7 +75,7 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
 
 250 markets fetched across 5 pages (pagination working), metadata filters applied before orderbook fetch, 3 markets flagged, and 1 paper trade opened.
 
-## Current Journal — 2026-04-28 17:49 PDT
+## Current Journal — 2026-04-28 18:05 PDT
 
 - Local branch is `main`. PRs #8–#11 merged.
 - Working tree clean except runtime artifacts (`data/`, `.claude/worktrees/`, `failure_log.md`). Do not commit.
@@ -84,11 +84,12 @@ Observed supervised daemon pass after metadata prefilter fix (2026-04-28):
   - `.venv/bin/pytest -q` → `415 passed`.
   - `.venv/bin/ruff check .` → clean.
 - PR #11 added `SCAN_FETCH_MAX_PAGES`; daemon was restarted with `SCAN_FETCH_MAX_PAGES=10`.
-- First pass after restart fetched offsets through 450 (`scanned_markets=500`), flagged 10 markets, wrote 10 predictions, opened 2 paper trades, and settled 1 timeout trade. This is a clear throughput improvement over 250-market passes.
+- Latest observed pass fetched offsets through 450, scanned 500 markets, flagged 10, wrote 10 predictions, opened 2 paper trades, and settled 1 timeout trade.
 - Current status after restart:
   - Open positions: **3**; exposure: **$250.16**.
   - Acceptance gate: not met — still 0 YES/NO settled trades of 50 needed.
   - Recent skip diagnostics: `too_far_to_resolution=1715`, `wide_spread=25`, `decision_should_trade_false=20`, `orderbook_unavailable=15`, `low_volume=10`, `recently_flagged=8`, `already_open_position=4`.
+- We are closer to the target on throughput, but still waiting on settled YES/NO trades before the paper-live gate can pass.
 
 ### mock-ai trade source fix (d8526f9, PR #10)
 
