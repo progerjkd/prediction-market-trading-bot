@@ -285,3 +285,52 @@ async def _settled_trade_in_db(conn, *, pnl: float, p_model: float, outcome: str
     t = Trade(condition_id="cx", token_id="tx", side="BUY", size=100, limit_price=0.5, fill_price=0.5, prediction_id=pid)
     tid = await insert_trade(conn, t)
     await close_trade(conn, tid, pnl=pnl, outcome=outcome)
+
+
+# ---------------------------------------------------------------------------
+# acceptance gate progress display
+# ---------------------------------------------------------------------------
+
+
+async def test_status_shows_trade_count_progress(tmp_path, monkeypatch, capsys):
+    """Status shows N/50 progress when below the trade threshold."""
+    from bot.daemon import async_main
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    for _i in range(3):
+        await _settled_trade_in_db(conn, pnl=1.0, p_model=0.7, outcome="YES")
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "3" in out
+    assert "50" in out
+    # should show progress fraction like "3 / 50"
+    assert "3 / 50" in out
+
+
+async def test_status_shows_win_rate_and_brier_progress(tmp_path, monkeypatch, capsys):
+    """Status shows live win_rate and brier even before gate is met."""
+    from bot.daemon import async_main
+
+    db_path = tmp_path / "bot.sqlite"
+    conn = await open_db(db_path)
+    # 2 wins, 1 loss → win_rate = 66.7%
+    await _settled_trade_in_db(conn, pnl=1.0, p_model=0.7, outcome="YES")
+    await _settled_trade_in_db(conn, pnl=1.0, p_model=0.7, outcome="YES")
+    await _settled_trade_in_db(conn, pnl=-1.0, p_model=0.3, outcome="NO")
+    await conn.close()
+
+    monkeypatch.setenv("BOT_DB_PATH", str(db_path))
+    monkeypatch.setenv("STOP_FILE", str(tmp_path / "STOP"))
+
+    await async_main(["--status"])
+    out = capsys.readouterr().out
+
+    assert "win_rate" in out.lower()
+    assert "brier" in out.lower()

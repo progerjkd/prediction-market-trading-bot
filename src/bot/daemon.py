@@ -24,6 +24,7 @@ from bot.polymarket.ws_orderbook import OrderBookCache, OrderBookSubscriber  # n
 from bot.storage.db import open_db  # noqa: E402
 from bot.storage.repo import (  # noqa: E402
     acceptance_criteria_met,
+    acceptance_gate_stats,
     daily_api_cost_usd,
     fetch_open_trades,
     persist_daily_metrics,
@@ -219,12 +220,18 @@ async def _print_status(conn) -> None:
                 f"{r['win_rate']:>8.1%} {r['brier_score']:>7.3f} "
                 f"{r['pnl_usd']:>9.2f} {r['sharpe']:>7.2f}"
             )
-    met, reason = await acceptance_criteria_met(conn)
+    met, _ = await acceptance_criteria_met(conn)
+    stats = await acceptance_gate_stats(conn)
     print()
     if met:
         print("=== Paper-live acceptance gate: MET — paper trading criteria satisfied ===")
     else:
-        print(f"=== Paper-live acceptance gate: NOT MET — {reason} ===")
+        wr_str = f"{stats['win_rate']:.1%}" if stats["win_rate"] is not None else "n/a"
+        bs_str = f"{stats['brier']:.3f}" if stats["brier"] is not None else "n/a"
+        print("=== Paper-live acceptance gate: NOT MET ===")
+        print(f"  progress:  {stats['n']} / {stats['needed']} settled trades")
+        print(f"  win_rate:  {wr_str:<8}  (need > 60.0%)")
+        print(f"  brier:     {bs_str:<8}  (need < 0.250)")
 
     open_trades = await fetch_open_trades(conn)
     open_exposure = await total_open_exposure(conn)
