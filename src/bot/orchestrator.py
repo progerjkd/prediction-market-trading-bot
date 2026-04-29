@@ -308,6 +308,7 @@ async def run_once(
                 prediction_id=prediction_id,
                 p_model=decision.p_model,
                 p_market=decision.p_market,
+                mock_ai=mock_ai,
             )
             if execution_plan is None:
                 await _record_skip(
@@ -487,6 +488,7 @@ async def _paper_execute_if_allowed(
     prediction_id: int,
     p_model: float,
     p_market: float,
+    mock_ai: bool = False,
 ) -> _PaperExecutionPlan | None:
     bankroll = await effective_bankroll_usd(conn, base_bankroll=settings.bankroll_usdc)
     kelly_fraction = await _adaptive_kelly_fraction(conn, settings)
@@ -561,6 +563,7 @@ async def _paper_execute_if_allowed(
         intended_size=shares,
         is_paper=True,
         prediction_id=prediction_id,
+        source="mock" if mock_ai else "paper_live",
     )
     return _PaperExecutionPlan(execution=execution, trade=trade)
 

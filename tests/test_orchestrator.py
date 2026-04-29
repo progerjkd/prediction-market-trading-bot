@@ -20,7 +20,7 @@ class FakePolymarketClient:
         self.execution_orderbook = execution_orderbook
         self.orderbook_calls = 0
 
-    async def list_markets(self, limit: int = 100, active_only: bool = True):
+    async def list_markets(self, limit: int = 100, active_only: bool = True, max_pages: int = 5):
         return [
             Market(
                 condition_id="cond-1",
@@ -52,7 +52,7 @@ class FakePolymarketClient:
 
 
 class FakeResolvedMarketClient(FakePolymarketClient):
-    async def list_markets(self, limit: int = 100, active_only: bool = True):
+    async def list_markets(self, limit: int = 100, active_only: bool = True, max_pages: int = 5):
         if active_only:
             return []
         return [
@@ -244,5 +244,32 @@ async def test_run_once_closes_resolved_losing_trade_and_records_lesson(tmp_path
         assert lesson[1] == "bad-prediction"
         assert "stronger cross-source narrative" in lesson[2]
         assert "cond-closed" in failure_log.read_text(encoding="utf-8")
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_mock_ai_trades_written_with_source_mock(tmp_path):
+    """Trades from --mock-ai runs must not be tagged paper_live to avoid polluting the acceptance gate."""
+    conn = await open_db(tmp_path / "bot.sqlite")
+    client = FakePolymarketClient()
+    settings = RuntimeSettings(
+        db_path=tmp_path / "bot.sqlite",
+        stop_file=tmp_path / "STOP",
+        bankroll_usdc=10_000,
+        edge_threshold=0.04,
+    )
+    try:
+        summary = await run_once(
+            settings=settings,
+            conn=conn,
+            polymarket_client=client,
+            max_markets=1,
+            mock_ai=True,
+        )
+        assert summary.paper_trades_written == 1
+        cur = await conn.execute("SELECT source FROM trades")
+        row = await cur.fetchone()
+        assert row[0] == "mock"
     finally:
         await conn.close()
