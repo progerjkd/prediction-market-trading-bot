@@ -547,6 +547,29 @@ async def acceptance_criteria_met(conn: aiosqlite.Connection, source: str = "pap
     return True, ""
 
 
+async def acceptance_gate_stats(
+    conn: aiosqlite.Connection, source: str = "paper_live"
+) -> dict:
+    """Return raw progress figures for the acceptance gate without pass/fail logic."""
+    cur = await conn.execute(
+        """
+        SELECT t.pnl, p.p_model, t.outcome
+        FROM trades t
+        LEFT JOIN predictions p ON t.prediction_id = p.id
+        WHERE t.outcome IN ('YES', 'NO') AND t.is_paper = 1 AND t.source = ?
+        """,
+        (source,),
+    )
+    rows = await cur.fetchall()
+    n = len(rows)
+    pnls = [float(r[0]) for r in rows if r[0] is not None]
+    wr = win_rate(pnls) if pnls else None
+    predicted = [float(r[1]) for r in rows if r[1] is not None]
+    actual = [1 if r[2] == "YES" else 0 for r in rows if r[1] is not None]
+    bs = brier_score(predicted, actual) if predicted else None
+    return {"n": n, "needed": 50, "win_rate": wr, "brier": bs}
+
+
 async def recent_daily_metrics(conn: aiosqlite.Connection, days: int = 7, source: str = "paper_live") -> list[dict]:
     """Return the most recent `days` rows for a source from metrics_daily, newest first."""
     from datetime import date, timedelta
