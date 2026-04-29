@@ -179,6 +179,7 @@ async def run_once(
             accepted = filter_tradeable_markets(
                 candidates,
                 min_volume=settings.scan_min_volume,
+                min_days_to_resolution=settings.scan_min_days,
                 max_days_to_resolution=settings.scan_max_days,
                 max_spread=settings.scan_max_spread,
                 min_liquidity=settings.scan_min_liquidity,
@@ -857,6 +858,8 @@ def _market_metadata_skip_reason(market: Market, settings: RuntimeSettings) -> s
         return "low_volume"
     if days > settings.scan_max_days:
         return "too_far_to_resolution"
+    if days < settings.scan_min_days:
+        return "too_close_to_resolution"
     if market.liquidity < settings.scan_min_liquidity:
         return "low_liquidity"
     return None

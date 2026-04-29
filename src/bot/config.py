@@ -46,6 +46,7 @@ class RuntimeSettings:
     scan_min_volume: float = 200.0
     scan_min_liquidity: float = 50.0
     scan_max_spread: float = 0.05
+    scan_min_days: int = 1
     scan_max_days: int = 30
     scan_interval_seconds: int = 900
     scan_fetch_limit: int = 50
@@ -83,6 +84,8 @@ class RuntimeSettings:
             errors.append(f"max_drawdown_pct must be in (0, 1], got {self.max_drawdown_pct}")
         if self.scan_max_spread <= 0.0:
             errors.append(f"scan_max_spread must be positive, got {self.scan_max_spread}")
+        if self.scan_min_days < 0:
+            errors.append(f"scan_min_days must be >= 0, got {self.scan_min_days}")
         if self.scan_max_days <= 0:
             errors.append(f"scan_max_days must be positive, got {self.scan_max_days}")
         if self.scan_interval_seconds < 0:
@@ -121,6 +124,7 @@ def load_settings() -> RuntimeSettings:
         scan_min_volume=_env_float("SCAN_MIN_VOLUME", 200.0),
         scan_min_liquidity=_env_float("SCAN_MIN_LIQUIDITY", 50.0),
         scan_max_spread=_env_float("SCAN_MAX_SPREAD", 0.05),
+        scan_min_days=_env_int("SCAN_MIN_DAYS", 1),
         scan_max_days=_env_int("SCAN_MAX_DAYS", 30),
         scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 900),
         scan_fetch_limit=_env_int("SCAN_FETCH_LIMIT", 50),
