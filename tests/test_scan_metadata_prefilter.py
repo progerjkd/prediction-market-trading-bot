@@ -66,3 +66,47 @@ async def test_far_future_markets_do_not_consume_orderbook_scan_slots(tmp_path):
     assert await skip_reason_counts(conn, since_seconds_ago=3600) == {"too_far_to_resolution": 2}
 
     await conn.close()
+
+
+async def test_wide_spread_markets_do_not_stop_scan_before_tradeable_candidates(tmp_path):
+    """Orderbook filtering keeps trying bounded extra markets until max_markets can be filled."""
+    from bot.orchestrator import run_once
+
+    markets = [
+        _market("wide-1", volume=8_000.0, liquidity=8_000.0, days=7),
+        _market("wide-2", volume=7_000.0, liquidity=7_000.0, days=7),
+        _market("tight-1", volume=6_000.0, liquidity=6_000.0, days=7),
+        _market("tight-2", volume=5_000.0, liquidity=5_000.0, days=7),
+    ]
+    fetched_orderbooks: list[str] = []
+
+    async def fake_get_orderbook(token_id: str) -> OrderBookSnapshot:
+        fetched_orderbooks.append(token_id)
+        if "wide" in token_id:
+            return OrderBookSnapshot(token_id=token_id, bids=[(0.40, 100)], asks=[(0.60, 100)], timestamp=0)
+        return _orderbook(token_id)
+
+    client = MagicMock()
+    client.list_markets = AsyncMock(return_value=markets)
+    client.get_orderbook = AsyncMock(side_effect=fake_get_orderbook)
+    client.get_market_resolution = AsyncMock(return_value=MarketResolution(resolved=False, final_yes_price=None))
+    client.close = AsyncMock()
+
+    settings = RuntimeSettings(stop_file=tmp_path / "STOP", scan_max_spread=0.05)
+    conn = await open_db(tmp_path / "bot.sqlite")
+
+    summary = await run_once(
+        settings=settings,
+        conn=conn,
+        polymarket_client=client,
+        mock_ai=True,
+        scan_only=True,
+        max_markets=2,
+    )
+
+    assert fetched_orderbooks == ["yes_wide-1", "yes_wide-2", "yes_tight-1", "yes_tight-2"]
+    assert summary.flagged_markets == 2
+    assert summary.flagged_yes_tokens == ["yes_tight-1", "yes_tight-2"]
+    assert await skip_reason_counts(conn, since_seconds_ago=3600) == {"wide_spread": 2}
+
+    await conn.close()
